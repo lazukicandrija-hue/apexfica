@@ -111,17 +111,30 @@ async function parseCriteria(text) {
 }
 
 // src/resolve.ts
-function firstFromJsonArray(s) {
-  if (!s) return void 0;
+function deburr2(s) {
+  const map = { \u010D: "c", \u0107: "c", \u0161: "s", \u017E: "z", \u0111: "dj" };
+  return s.toLowerCase().replace(/[čćšžđ]/g, (m) => map[m] ?? m);
+}
+function toArray(s) {
+  if (!s) return [];
   try {
     const a = JSON.parse(s);
-    if (Array.isArray(a) && a.length) return String(a[0]);
+    if (Array.isArray(a)) return a.map(String);
   } catch {
   }
-  return s;
+  return String(s).split(",").map((x) => x.trim()).filter(Boolean);
+}
+function roomsRange(s) {
+  const nums = toArray(s).map((x) => roomsToNumber(x)).filter((n) => n != null);
+  if (!nums.length) return {};
+  return { min: Math.min(...nums), max: Math.max(...nums) };
+}
+function locationSlugs(s) {
+  return toArray(s).map((x) => deburr2(x).trim().replace(/\s+/g, "-")).filter(Boolean);
 }
 async function resolveBuyerCriteria(b) {
-  const rooms = roomsToNumber(firstFromJsonArray(b.desired_rooms));
+  const rooms = roomsRange(b.desired_rooms);
+  const locations = locationSlugs(b.preferred_locations);
   const text = [b.location, b.notes].filter(Boolean).join(". ").trim();
   let parsed = {};
   if (text.length > 8) {
@@ -131,14 +144,14 @@ async function resolveBuyerCriteria(b) {
     }
   }
   return {
-    location: parsed.location ?? void 0,
+    locations: locations.length ? locations : parsed.location ? [parsed.location] : void 0,
     excludeLocations: parsed.excludeLocations,
     priceMin: parsed.priceMin ?? void 0,
     priceMax: parsed.priceMax ?? (b.budget ?? void 0),
     areaMin: parsed.areaMin ?? void 0,
     areaMax: parsed.areaMax ?? void 0,
-    roomsMin: rooms ?? parsed.roomsMin ?? void 0,
-    roomsMax: rooms ?? parsed.roomsMax ?? void 0
+    roomsMin: rooms.min,
+    roomsMax: rooms.max
   };
 }
 async function criteriaFromText(text) {
@@ -267,8 +280,10 @@ async function searchFourZida(opts = {}) {
 function matchListings(listings, c) {
   const effectiveMax = c.priceMax != null ? c.priceMax * (1 + (c.priceTolerance ?? 0)) : null;
   return listings.filter((l) => {
-    if (c.location) {
-      if (!l.location.toLowerCase().includes(c.location.toLowerCase())) return false;
+    const wantLocs = c.locations?.length ? c.locations : c.location ? [c.location] : [];
+    if (wantLocs.length) {
+      const slug = l.location.toLowerCase();
+      if (!wantLocs.some((x) => slug.includes(x.toLowerCase()))) return false;
     }
     if (c.excludeLocations?.length) {
       const slug = l.location.toLowerCase();

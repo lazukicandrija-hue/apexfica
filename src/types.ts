@@ -13,7 +13,8 @@ export type Listing = {
 };
 
 export type Criteria = {
-  location?: string; // tekst koji se traži u slug-u kvarta, npr. "centar", "liman"
+  location?: string; // jedan kvart (slobodna pretraga)
+  locations?: string[]; // više kvartova — poklapanje ako je u BILO KOM (preferirane lokacije kupca)
   excludeLocations?: string[]; // kvartovi koje kupac NE želi, npr. ["telep","adice"]
   priceMin?: number;
   priceMax?: number;

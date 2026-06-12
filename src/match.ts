@@ -8,8 +8,10 @@ export function matchListings(listings: Listing[], c: Criteria): Listing[] {
 
   return listings
     .filter((l) => {
-      if (c.location) {
-        if (!l.location.toLowerCase().includes(c.location.toLowerCase())) return false;
+      const wantLocs = c.locations?.length ? c.locations : c.location ? [c.location] : [];
+      if (wantLocs.length) {
+        const slug = l.location.toLowerCase();
+        if (!wantLocs.some((x) => slug.includes(x.toLowerCase()))) return false;
       }
       if (c.excludeLocations?.length) {
         const slug = l.location.toLowerCase();
