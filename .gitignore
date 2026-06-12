@@ -18,6 +18,7 @@
 settings.json
 predlozi.txt
 prazne-pretrage.txt
+watches.json
 
 # klonirani referentni repoi (CRM + sajt) — nisu deo Fice
 /_reference

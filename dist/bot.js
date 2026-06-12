@@ -293,6 +293,7 @@ var ROOT = here.endsWith("dist") || here.endsWith("src") ? join2(here, "..") : h
 var SETTINGS_FILE = join2(ROOT, "settings.json");
 var SUGGESTIONS_FILE = join2(ROOT, "predlozi.txt");
 var EMPTY_LOG = join2(ROOT, "prazne-pretrage.txt");
+var WATCHES_FILE = join2(ROOT, "watches.json");
 var DEFAULTS = { priceTolerance: 0, resultCount: 8, maxPages: 18 };
 function getSettings() {
   try {
@@ -330,6 +331,38 @@ function logEmpty(who, query, criteria) {
   } catch {
   }
 }
+function getWatches() {
+  try {
+    if (existsSync2(WATCHES_FILE)) return JSON.parse(readFileSync2(WATCHES_FILE, "utf8"));
+  } catch {
+  }
+  return [];
+}
+function saveWatches(list) {
+  writeFileSync(WATCHES_FILE, JSON.stringify(list, null, 2));
+}
+function addWatch(w) {
+  const all = getWatches();
+  const nums = all.map((x) => Number(x.id.replace(/\D/g, "")) || 0);
+  const watch = { ...w, id: "w" + (Math.max(0, ...nums) + 1), createdAt: (/* @__PURE__ */ new Date()).toISOString() };
+  all.push(watch);
+  saveWatches(all);
+  return watch;
+}
+function removeWatch(id) {
+  const all = getWatches();
+  const next = all.filter((w) => w.id.toLowerCase() !== id.toLowerCase());
+  if (next.length === all.length) return false;
+  saveWatches(next);
+  return true;
+}
+function updateWatchSeen(id, seen) {
+  const all = getWatches();
+  const w = all.find((x) => x.id === id);
+  if (!w) return;
+  w.seen = seen.slice(-300);
+  saveWatches(all);
+}
 
 // src/respond.ts
 var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
@@ -341,14 +374,16 @@ var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
 \u{1F464} Po kupcu iz CRM-a:
    "za Smiljka"  \xB7  /kupac Smiljka  \xB7  /kupci (lista)
 
-\u2699\uFE0F Pode\u0161avanja (menja\u0161 sam):
-   /podesavanja \u2014 prika\u017Ei trenutna
-   /podesi tolerancija 10 \u2014 dozvoli +10% preko bud\u017Eeta
-   /podesi rezultata 12  \xB7  /podesi dubina 25
+\u{1F514} Aktivno pra\u0107enje (javim \u010Dim isko\u010Di NOV oglas):
+   /prati Smiljka \u2014 prati kupca iz CRM-a
+   /prati dvosoban centar 130000-150000 \u2014 slobodno
+   /pratnje (lista)  \xB7  /prekini w1 (stop)
+
+\u2699\uFE0F Pode\u0161avanja:
+   /podesavanja  \xB7  /podesi tolerancija 10  \xB7  /podesi rezultata 12  \xB7  /podesi dubina 25
 
 \u{1F4DD} Predlozi:
-   /predlog <\u0161ta bi voleo da Fica radi>
-   /predlozi \u2014 lista zabele\u017Eenih`;
+   /predlog <\u0161ta bi voleo da Fica radi>  \xB7  /predlozi`;
 function fmtCriteria(c) {
   const p = [];
   if (c.location) p.push(`\u{1F4CD} ${c.location}`);
@@ -360,23 +395,23 @@ function fmtCriteria(c) {
   if (c.roomsMin != null) p.push(`\u{1F6AA} ${c.roomsMin} sob`);
   return p.join(" \xB7 ") || "(bez filtera)";
 }
-function formatReply(who, c, poolSize, matches, resultCount) {
+function fmtListing(m) {
+  const price = m.price != null ? `${m.price.toLocaleString("sr-RS")}\u20AC` : "\u2014";
+  return `${price} \xB7 ${m.area ?? "\u2014"}m\xB2 \xB7 ${m.rooms ?? "\u2014"} sob \xB7 ${m.pricePerM2 ?? "\u2014"}\u20AC/m\xB2
+${m.url}`;
+}
+function formatReply(who, c, poolSize, matches, n) {
   const head = `\u{1F3E0} ${who}
 ${fmtCriteria(c)}
 
 \u2705 ${matches.length} poklapanja (od ${poolSize} pregledanih):`;
-  const lines = matches.slice(0, resultCount).map((m, i) => {
-    const price = m.price != null ? `${m.price.toLocaleString("sr-RS")}\u20AC` : "\u2014";
-    return `
+  const lines = matches.slice(0, n).map((m, i) => `
 
-${i + 1}. ${price} \xB7 ${m.area ?? "\u2014"}m\xB2 \xB7 ${m.rooms ?? "\u2014"} sob \xB7 ${m.pricePerM2 ?? "\u2014"}\u20AC/m\xB2
-${m.url}`;
-  });
+${i + 1}. ${fmtListing(m)}`);
   let msg = head + lines.join("");
-  if (matches.length > resultCount)
-    msg += `
+  if (matches.length > n) msg += `
 
-\u2026i jo\u0161 ${matches.length - resultCount}. Suzi kriterijume za precizniju listu.`;
+\u2026i jo\u0161 ${matches.length - n}. Suzi kriterijume za precizniju listu.`;
   if (!matches.length) msg += `
 (nema pogodaka \u2014 probaj \u0161ire opsege ili drugi kvart)`;
   return msg.slice(0, 4e3);
@@ -390,9 +425,7 @@ function handleSettings(t) {
 \u2022 dubina pretrage: ${s.maxPages} strana
 
 Promena: /podesi <ime> <broj>
-   /podesi tolerancija 10
-   /podesi rezultata 12
-   /podesi dubina 25`;
+   /podesi tolerancija 10  \xB7  /podesi rezultata 12  \xB7  /podesi dubina 25`;
   }
   const m = t.match(/^\/podesi\s+(\w+)\s+(\d+)/i);
   if (!m) return null;
@@ -415,11 +448,44 @@ Promena: /podesi <ime> <broj>
   }
   return `Ne znam pode\u0161avanje "${key}". Probaj: tolerancija, rezultata, dubina.`;
 }
-async function handleText(text, user) {
+async function resolveTarget(arg) {
+  const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
+  const b = buyers.find(
+    (x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(arg.toLowerCase())
+  );
+  if (b) return { criteria: await resolveBuyerCriteria(b), label: `${b.first_name} ${b.last_name}` };
+  return { criteria: await criteriaFromText(arg), label: arg };
+}
+async function handleWatch(t, chatId) {
+  const add = t.match(/^\/prati\s+(.+)/is);
+  if (add) {
+    if (chatId == null) return "Ne mogu da postavim pra\u0107enje (nedostaje chat).";
+    const { criteria, label } = await resolveTarget(add[1].trim());
+    criteria.priceTolerance = getSettings().priceTolerance;
+    const all = await searchFourZida({ maxPages: getSettings().maxPages });
+    const current = matchListings(all, criteria);
+    const w = addWatch({ label, chatId, criteria, seen: current.map((m) => m.id) });
+    return `\u{1F514} Pratim "${label}" (${fmtCriteria(criteria)}).
+Trenutno aktivnih: ${current.length} (njih ne brojim kao nove). Javi\u0107u \u010Dim isko\u010Di NOV oglas.
+ID: ${w.id} \u2014 zaustavi sa /prekini ${w.id}`;
+  }
+  if (/^\/pratnje\b/i.test(t)) {
+    const ws = getWatches();
+    return ws.length ? "\u{1F514} Aktivna pra\u0107enja:\n" + ws.map((w) => `\u2022 ${w.id}: ${w.label} (${fmtCriteria(w.criteria)})`).join("\n") + "\n\nStop: /prekini <id>" : "Nema aktivnih pra\u0107enja. Dodaj sa: /prati <kupac ili opis>";
+  }
+  const stop = t.match(/^\/prekini\s+(\w+)/i);
+  if (stop) {
+    return removeWatch(stop[1]) ? `\u2705 Pra\u0107enje ${stop[1]} zaustavljeno.` : `Nema pra\u0107enja "${stop[1]}". /pratnje za listu.`;
+  }
+  return null;
+}
+async function handleText(text, user, chatId) {
   const t = text.trim();
   if (!t || /^\/(start|help)\b/i.test(t)) return HELP;
   const settingsReply = handleSettings(t);
   if (settingsReply) return settingsReply;
+  const watchReply = await handleWatch(t, chatId);
+  if (watchReply) return watchReply;
   const sug = t.match(/^\/predlog\s+([\s\S]+)/i);
   if (sug) {
     addSuggestion(user ?? "?", sug[1].trim());
@@ -438,14 +504,9 @@ async function handleText(text, user) {
   let who;
   const byBuyer = t.match(/^(?:\/kupac\s+|za\s+)(.+)/i);
   if (byBuyer) {
-    const name = byBuyer[1].trim();
-    const buyers = await getBuyers({ status: "Aktivan" });
-    const b = buyers.find(
-      (x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(name.toLowerCase())
-    );
-    if (!b) return `Ne na\u0111oh aktivnog kupca "${name}". Probaj /kupci za listu.`;
-    criteria = await resolveBuyerCriteria(b);
-    who = `${b.first_name} ${b.last_name}`;
+    const { criteria: c, label } = await resolveTarget(byBuyer[1].trim());
+    criteria = c;
+    who = label;
   } else {
     criteria = await criteriaFromText(t);
     who = "Slobodna pretraga";
@@ -456,6 +517,21 @@ async function handleText(text, user) {
   const matches = matchListings(all, criteria);
   if (!matches.length) logEmpty(who, t, criteria);
   return formatReply(who, criteria, all.length, matches, s.resultCount);
+}
+async function runWatchCycle(send) {
+  const watches = getWatches();
+  if (!watches.length) return;
+  const all = await searchFourZida({ maxPages: getSettings().maxPages });
+  for (const w of watches) {
+    const matches = matchListings(all, w.criteria);
+    const fresh = matches.filter((m) => !w.seen.includes(m.id));
+    if (!fresh.length) continue;
+    for (const m of fresh.slice(0, 10)) {
+      await send(w.chatId, `\u{1F514} NOVO za "${w.label}"
+${fmtListing(m)}`);
+    }
+    updateWatchSeen(w.id, [...w.seen, ...fresh.map((m) => m.id)]);
+  }
 }
 
 // src/bot.ts
@@ -478,6 +554,14 @@ async function main() {
   console.log(
     `\u{1F916} Fica @${me.result.username} slu\u0161a. Dozvoljeni: ${ALLOWED.join(", ") || "\u26A0\uFE0F SVI (postavi ALLOWED_TELEGRAM_USERS!)"}`
   );
+  const CHECK_MIN = Number(process.env.FICA_CHECK_MINUTES) || 30;
+  setInterval(() => {
+    runWatchCycle(
+      (chatId, text) => tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true }).then(() => {
+      })
+    ).catch((e) => console.error("watch cycle:", e?.message ?? e));
+  }, CHECK_MIN * 6e4);
+  console.log(`\u{1F514} Pra\u0107enja se proveravaju svakih ${CHECK_MIN} min.`);
   let offset = 0;
   for (; ; ) {
     let res;
@@ -501,7 +585,7 @@ async function main() {
       }
       await tg("sendMessage", { chat_id: msg.chat.id, text: "\u{1F50E} Tra\u017Eim, momenat..." });
       try {
-        const reply = await handleText(msg.text, user);
+        const reply = await handleText(msg.text, user, msg.chat.id);
         await tg("sendMessage", {
           chat_id: msg.chat.id,
           text: reply,

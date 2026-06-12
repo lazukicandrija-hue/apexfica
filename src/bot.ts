@@ -1,7 +1,7 @@
 // Telegram bot (long-polling). Pokretanje: npm run bot
 import { loadEnv } from "./env.ts";
 loadEnv();
-import { handleText } from "./respond.ts";
+import { handleText, runWatchCycle } from "./respond.ts";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const ALLOWED = (process.env.ALLOWED_TELEGRAM_USERS ?? "")
@@ -26,6 +26,15 @@ async function main(): Promise<void> {
   console.log(
     `🤖 Fica @${me.result.username} sluša. Dozvoljeni: ${ALLOWED.join(", ") || "⚠️ SVI (postavi ALLOWED_TELEGRAM_USERS!)"}`,
   );
+
+  // Pozadinsko praćenje: na svakih N min pošalji NOVE oglase za sva /prati
+  const CHECK_MIN = Number(process.env.FICA_CHECK_MINUTES) || 30;
+  setInterval(() => {
+    runWatchCycle((chatId, text) =>
+      tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true }).then(() => {}),
+    ).catch((e) => console.error("watch cycle:", e?.message ?? e));
+  }, CHECK_MIN * 60_000);
+  console.log(`🔔 Praćenja se proveravaju svakih ${CHECK_MIN} min.`);
 
   let offset = 0;
   for (;;) {
@@ -52,7 +61,7 @@ async function main(): Promise<void> {
 
       await tg("sendMessage", { chat_id: msg.chat.id, text: "🔎 Tražim, momenat..." });
       try {
-        const reply = await handleText(msg.text, user);
+        const reply = await handleText(msg.text, user, msg.chat.id);
         await tg("sendMessage", {
           chat_id: msg.chat.id,
           text: reply,
