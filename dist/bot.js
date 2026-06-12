@@ -275,6 +275,22 @@ async function searchFourZida(opts = {}) {
   cache.set(cacheKey, { at: Date.now(), data });
   return data;
 }
+var sellerCache = /* @__PURE__ */ new Map();
+async function getFourZidaSeller(url) {
+  const cached = sellerCache.get(url);
+  if (cached !== void 0) return cached;
+  let seller = null;
+  try {
+    const res = await fetch(url, { headers: { "user-agent": UA } });
+    if (res.ok) {
+      const m = (await res.text()).match(/advertiserType[\\"\s]*:[\\"\s]*(\d+)/);
+      if (m) seller = m[1] === "4" ? "owner" : "agency";
+    }
+  } catch {
+  }
+  sellerCache.set(url, seller);
+  return seller;
+}
 
 // src/portals/oglasi.ts
 var UA2 = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -298,7 +314,8 @@ function parseListings2(html) {
     const url = BASE2 + href[1];
     const id = href[1].match(/\/oglas\/([0-9-]+)\//)?.[1] ?? url;
     const priceM = a.match(/itemprop="price"[^>]*content="([\d.]+)"/);
-    const price = priceM ? Math.round(Number(priceM[1])) : null;
+    const priceNum = priceM ? Number(priceM[1]) : NaN;
+    const price = priceNum >= 5e3 ? Math.round(priceNum) : null;
     const curM = a.match(/itemprop="priceCurrency"[^>]*content="([A-Z]+)"/);
     const areaM = a.match(/Kvadratura:[\s\S]*?<strong>\s*([\d.,]+)\s*m/);
     const area = areaM ? Number(areaM[1].replace(/\./g, "").replace(",", ".")) : null;
@@ -439,9 +456,9 @@ async function searchAllPortals(opts = {}) {
   if (hit && Date.now() - hit.at < CACHE_TTL_MS2) return hit.data;
   const portalMax = Math.min(maxPages, 12);
   const settled = await Promise.allSettled([
-    searchFourZida({ maxPages }),
     searchOglasi({ ownerOnly, maxPages: portalMax }),
-    searchNekretnine({ maxPages: portalMax })
+    searchNekretnine({ maxPages: portalMax }),
+    searchFourZida({ maxPages })
   ]);
   let all = [];
   for (const r of settled) if (r.status === "fulfilled") all = all.concat(r.value);
@@ -455,6 +472,22 @@ async function searchAllPortals(opts = {}) {
     out.push(l);
   }
   cache2.set(key, { at: Date.now(), data: out });
+  return out;
+}
+async function confirmOwners(listings, cap = 30) {
+  const out = [];
+  let checks = 0;
+  for (const l of listings) {
+    if (l.portal === "4zida" && l.seller == null) {
+      if (checks >= cap) continue;
+      checks++;
+      l.seller = await getFourZidaSeller(l.url);
+      if (l.seller !== "owner") continue;
+      out.push(l);
+      continue;
+    }
+    if (l.seller !== "agency") out.push(l);
+  }
   return out;
 }
 
@@ -737,12 +770,13 @@ async function buyerCycle(all, chatId, send, silent) {
     if (silent || changed) {
       entry.seen = matches.map((m) => m.id);
     } else {
-      const fresh = matches.filter((m) => !entry.seen.includes(m.id));
+      const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
+      const fresh = await confirmOwners(freshAll);
       for (const m of fresh.slice(0, 10)) {
         await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})
 ${fmtListing(m)}`);
       }
-      if (fresh.length) entry.seen = [...entry.seen, ...fresh.map((m) => m.id)].slice(-300);
+      if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
     }
     monitor[b.id] = entry;
   }
@@ -787,7 +821,7 @@ async function handleText(text, user, chatId) {
   const s = getSettings();
   criteria.priceTolerance = s.priceTolerance;
   const all = await searchAllPortals({ maxPages: s.maxPages });
-  const matches = matchListings(all, criteria);
+  const matches = await confirmOwners(matchListings(all, criteria));
   if (!matches.length) logEmpty(who, t, criteria);
   return formatReply(who, criteria, all.length, matches, s.resultCount);
 }
@@ -805,11 +839,12 @@ async function runWatchCycle(send) {
       updateWatchSeen(w.id, matches.map((m) => m.id));
       continue;
     }
-    const fresh = matches.filter((m) => !w.seen.includes(m.id));
-    if (!fresh.length) continue;
+    const freshAll = matches.filter((m) => !w.seen.includes(m.id));
+    if (!freshAll.length) continue;
+    const fresh = await confirmOwners(freshAll);
     for (const m of fresh.slice(0, 10)) await send(w.chatId, `\u{1F514} NOVO za "${w.label}"
 ${fmtListing(m)}`);
-    updateWatchSeen(w.id, [...w.seen, ...fresh.map((m) => m.id)]);
+    updateWatchSeen(w.id, [...w.seen, ...freshAll.map((m) => m.id)]);
   }
   if (auto) await buyerCycle(all, auto, send, silent);
 }

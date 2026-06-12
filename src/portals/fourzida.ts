@@ -143,3 +143,24 @@ export async function searchFourZida(opts: SearchOptions = {}): Promise<Listing[
   cache.set(cacheKey, { at: Date.now(), data });
   return data;
 }
+
+// 4zida ne otkriva tip prodavca u pretrazi — proveri sa detaljne strane oglasa.
+// advertiserType: 4 = Vlasnik; 1/2/3 = Agencija/Firma/Investitor (= nije vlasnik).
+const sellerCache = new Map<string, "owner" | "agency" | null>();
+
+export async function getFourZidaSeller(url: string): Promise<"owner" | "agency" | null> {
+  const cached = sellerCache.get(url);
+  if (cached !== undefined) return cached;
+  let seller: "owner" | "agency" | null = null;
+  try {
+    const res = await fetch(url, { headers: { "user-agent": UA } });
+    if (res.ok) {
+      const m = (await res.text()).match(/advertiserType[\\"\s]*:[\\"\s]*(\d+)/);
+      if (m) seller = m[1] === "4" ? "owner" : "agency";
+    }
+  } catch {
+    /* mreža — ostavi null */
+  }
+  sellerCache.set(url, seller);
+  return seller;
+}

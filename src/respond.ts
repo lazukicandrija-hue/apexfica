@@ -4,7 +4,7 @@ import type { Criteria, Listing } from "./types.ts";
 import type { Buyer } from "./crm.ts";
 import { getBuyers } from "./crm.ts";
 import { resolveBuyerCriteria, criteriaFromText } from "./resolve.ts";
-import { searchAllPortals } from "./portals/index.ts";
+import { searchAllPortals, confirmOwners } from "./portals/index.ts";
 import { matchListings } from "./match.ts";
 import {
   getSettings,
@@ -194,11 +194,12 @@ async function buyerCycle(all: Listing[], chatId: number, send: Send, silent: bo
     if (silent || changed) {
       entry.seen = matches.map((m) => m.id); // samo baseline, bez slanja
     } else {
-      const fresh = matches.filter((m) => !entry.seen.includes(m.id));
+      const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
+      const fresh = await confirmOwners(freshAll); // proveri 4zida vlasnike samo na novim
       for (const m of fresh.slice(0, 10)) {
         await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})\n${fmtListing(m)}`);
       }
-      if (fresh.length) entry.seen = [...entry.seen, ...fresh.map((m) => m.id)].slice(-300);
+      if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
     }
     monitor[b.id] = entry;
   }
@@ -250,7 +251,7 @@ export async function handleText(text: string, user?: string, chatId?: number): 
   const s = getSettings();
   criteria.priceTolerance = s.priceTolerance;
   const all = await searchAllPortals({ maxPages: s.maxPages });
-  const matches = matchListings(all, criteria);
+  const matches = await confirmOwners(matchListings(all, criteria));
   if (!matches.length) logEmpty(who, t, criteria);
   return formatReply(who, criteria, all.length, matches, s.resultCount);
 }
@@ -275,10 +276,11 @@ export async function runWatchCycle(send: Send): Promise<void> {
       updateWatchSeen(w.id, matches.map((m) => m.id));
       continue;
     }
-    const fresh = matches.filter((m) => !w.seen.includes(m.id));
-    if (!fresh.length) continue;
+    const freshAll = matches.filter((m) => !w.seen.includes(m.id));
+    if (!freshAll.length) continue;
+    const fresh = await confirmOwners(freshAll);
     for (const m of fresh.slice(0, 10)) await send(w.chatId, `🔔 NOVO za "${w.label}"\n${fmtListing(m)}`);
-    updateWatchSeen(w.id, [...w.seen, ...fresh.map((m) => m.id)]);
+    updateWatchSeen(w.id, [...w.seen, ...freshAll.map((m) => m.id)]);
   }
 
   if (auto) await buyerCycle(all, auto, send, silent);

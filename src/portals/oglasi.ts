@@ -39,7 +39,9 @@ function parseListings(html: string): Listing[] {
     const id = href[1].match(/\/oglas\/([0-9-]+)\//)?.[1] ?? url;
 
     const priceM = a.match(/itemprop="price"[^>]*content="([\d.]+)"/);
-    const price = priceM ? Math.round(Number(priceM[1])) : null;
+    const priceNum = priceM ? Number(priceM[1]) : NaN;
+    // ispod 5000 = greška/€-po-m²/rata (nijedan stan u NS nije toliko jeftin)
+    const price = priceNum >= 5000 ? Math.round(priceNum) : null;
     const curM = a.match(/itemprop="priceCurrency"[^>]*content="([A-Z]+)"/);
 
     const areaM = a.match(/Kvadratura:[\s\S]*?<strong>\s*([\d.,]+)\s*m/);
