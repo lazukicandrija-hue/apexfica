@@ -1,0 +1,13 @@
+{
+  "name": "fica",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fica — agent/scraper za Apex (CRM <-> portali nekretnina)",
+  "engines": { "node": ">=22.6" },
+  "scripts": {
+    "search": "node --experimental-strip-types src/cli.ts",
+    "find": "node --env-file=.env --experimental-strip-types src/find-for-buyer.ts",
+    "bot": "node --experimental-strip-types src/bot.ts"
+  }
+}

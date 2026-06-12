@@ -1,0 +1,23 @@
+# dependencies
+/node_modules
+
+# build
+/dist
+
+# secrets — NIKAD u commit (repoi su javni!)
+.env
+.env.*
+!.env.example
+
+# database / cache
+*.db
+*.db-wal
+*.db-shm
+/data
+
+# klonirani referentni repoi (CRM + sajt) — nisu deo Fice
+/_reference
+
+# misc
+.DS_Store
+*.log
