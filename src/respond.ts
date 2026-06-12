@@ -176,25 +176,31 @@ async function handleAuto(t: string, chatId?: number): Promise<string | null> {
 }
 
 // Pozadinski prolaz kroz hot/med kupce — pošalji samo NOVE oglase.
-async function buyerCycle(all: Listing[], chatId: number, send: Send): Promise<void> {
+async function buyerCycle(all: Listing[], chatId: number, send: Send, silent: boolean): Promise<void> {
   const buyers = await activeHotMed();
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
   for (const b of buyers) {
     let entry = monitor[b.id];
-    if (!entry || entry.text !== buyerText(b)) {
-      // nov kupac ili promenjeni kriterijumi → re-parsiraj (Haiku) i baseline-uj (bez slanja)
+    const changed = !entry || entry.text !== buyerText(b);
+    if (changed) {
+      // nov kupac ili promenjeni kriterijumi → re-parsiraj (Haiku)
       const criteria = await resolveBuyerCriteria(b);
       criteria.priceTolerance = tol;
-      monitor[b.id] = { text: buyerText(b), criteria, seen: matchListings(all, criteria).map((m) => m.id) };
-      continue;
+      entry = { text: buyerText(b), criteria, seen: [] };
     }
     entry.criteria.priceTolerance = tol;
-    const fresh = matchListings(all, entry.criteria).filter((m) => !entry.seen.includes(m.id));
-    for (const m of fresh.slice(0, 10)) {
-      await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})\n${fmtListing(m)}`);
+    const matches = matchListings(all, entry.criteria);
+    if (silent || changed) {
+      entry.seen = matches.map((m) => m.id); // samo baseline, bez slanja
+    } else {
+      const fresh = matches.filter((m) => !entry.seen.includes(m.id));
+      for (const m of fresh.slice(0, 10)) {
+        await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})\n${fmtListing(m)}`);
+      }
+      if (fresh.length) entry.seen = [...entry.seen, ...fresh.map((m) => m.id)].slice(-300);
     }
-    if (fresh.length) entry.seen = [...entry.seen, ...fresh.map((m) => m.id)].slice(-300);
+    monitor[b.id] = entry;
   }
   const ids = new Set(buyers.map((b) => b.id));
   for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
@@ -250,18 +256,30 @@ export async function handleText(text: string, user?: string, chatId?: number): 
 }
 
 // Pozadinska provera: ručna praćenja + auto HOT/MED kupci. Šalje samo NOVE oglase.
+let primed = false;
+
 export async function runWatchCycle(send: Send): Promise<void> {
   const watches = getWatches();
   const auto = getSettings().autoChatId;
   if (!watches.length && !auto) return;
   const all = await searchAllPortals({ maxPages: getSettings().maxPages });
 
+  // Prvi prolaz po startu (npr. posle deploy-a / promene skupa portala):
+  // samo "zapamti zatečeno", bez slanja — da ne zatrpa alarmima.
+  const silent = !primed;
+  primed = true;
+
   for (const w of watches) {
-    const fresh = matchListings(all, w.criteria).filter((m) => !w.seen.includes(m.id));
+    const matches = matchListings(all, w.criteria);
+    if (silent) {
+      updateWatchSeen(w.id, matches.map((m) => m.id));
+      continue;
+    }
+    const fresh = matches.filter((m) => !w.seen.includes(m.id));
     if (!fresh.length) continue;
     for (const m of fresh.slice(0, 10)) await send(w.chatId, `🔔 NOVO za "${w.label}"\n${fmtListing(m)}`);
     updateWatchSeen(w.id, [...w.seen, ...fresh.map((m) => m.id)]);
   }
 
-  if (auto) await buyerCycle(all, auto, send);
+  if (auto) await buyerCycle(all, auto, send, silent);
 }

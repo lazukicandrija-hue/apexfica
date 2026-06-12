@@ -720,25 +720,31 @@ async function handleAuto(t, chatId) {
   const cur = getSettings().autoChatId;
   return cur ? "Auto-pra\u0107enje je UKLJU\u010CENO. /auto off da isklju\u010Di\u0161." : "Auto-pra\u0107enje je isklju\u010Deno. /auto on da uklju\u010Di\u0161 (alarmi sti\u017Eu u chat gde to ukuca\u0161).";
 }
-async function buyerCycle(all, chatId, send) {
+async function buyerCycle(all, chatId, send, silent) {
   const buyers = await activeHotMed();
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
   for (const b of buyers) {
     let entry = monitor[b.id];
-    if (!entry || entry.text !== buyerText(b)) {
+    const changed = !entry || entry.text !== buyerText(b);
+    if (changed) {
       const criteria = await resolveBuyerCriteria(b);
       criteria.priceTolerance = tol;
-      monitor[b.id] = { text: buyerText(b), criteria, seen: matchListings(all, criteria).map((m) => m.id) };
-      continue;
+      entry = { text: buyerText(b), criteria, seen: [] };
     }
     entry.criteria.priceTolerance = tol;
-    const fresh = matchListings(all, entry.criteria).filter((m) => !entry.seen.includes(m.id));
-    for (const m of fresh.slice(0, 10)) {
-      await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})
+    const matches = matchListings(all, entry.criteria);
+    if (silent || changed) {
+      entry.seen = matches.map((m) => m.id);
+    } else {
+      const fresh = matches.filter((m) => !entry.seen.includes(m.id));
+      for (const m of fresh.slice(0, 10)) {
+        await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})
 ${fmtListing(m)}`);
+      }
+      if (fresh.length) entry.seen = [...entry.seen, ...fresh.map((m) => m.id)].slice(-300);
     }
-    if (fresh.length) entry.seen = [...entry.seen, ...fresh.map((m) => m.id)].slice(-300);
+    monitor[b.id] = entry;
   }
   const ids = new Set(buyers.map((b) => b.id));
   for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
@@ -785,19 +791,27 @@ async function handleText(text, user, chatId) {
   if (!matches.length) logEmpty(who, t, criteria);
   return formatReply(who, criteria, all.length, matches, s.resultCount);
 }
+var primed = false;
 async function runWatchCycle(send) {
   const watches = getWatches();
   const auto = getSettings().autoChatId;
   if (!watches.length && !auto) return;
   const all = await searchAllPortals({ maxPages: getSettings().maxPages });
+  const silent = !primed;
+  primed = true;
   for (const w of watches) {
-    const fresh = matchListings(all, w.criteria).filter((m) => !w.seen.includes(m.id));
+    const matches = matchListings(all, w.criteria);
+    if (silent) {
+      updateWatchSeen(w.id, matches.map((m) => m.id));
+      continue;
+    }
+    const fresh = matches.filter((m) => !w.seen.includes(m.id));
     if (!fresh.length) continue;
     for (const m of fresh.slice(0, 10)) await send(w.chatId, `\u{1F514} NOVO za "${w.label}"
 ${fmtListing(m)}`);
     updateWatchSeen(w.id, [...w.seen, ...fresh.map((m) => m.id)]);
   }
-  if (auto) await buyerCycle(all, auto, send);
+  if (auto) await buyerCycle(all, auto, send, silent);
 }
 
 // src/bot.ts
