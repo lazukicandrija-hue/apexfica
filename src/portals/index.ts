@@ -18,11 +18,11 @@ export async function searchAllPortals(opts: AggOptions = {}): Promise<Listing[]
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
 
   const portalMax = Math.min(maxPages, 12);
-  // Redosled: portali sa poznatim vlasnikom prvi → kod duplikata oni pobeđuju.
+  // 4zida je primarni → prvi u redu, pa kod duplikata 4zida pobeđuje (zadrži se njegov link).
   const settled = await Promise.allSettled([
+    searchFourZida({ maxPages }),
     searchOglasi({ ownerOnly, maxPages: portalMax }),
     searchNekretnine({ maxPages: portalMax }),
-    searchFourZida({ maxPages }),
   ]);
 
   let all: Listing[] = [];

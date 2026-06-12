@@ -456,9 +456,9 @@ async function searchAllPortals(opts = {}) {
   if (hit && Date.now() - hit.at < CACHE_TTL_MS2) return hit.data;
   const portalMax = Math.min(maxPages, 12);
   const settled = await Promise.allSettled([
+    searchFourZida({ maxPages }),
     searchOglasi({ ownerOnly, maxPages: portalMax }),
-    searchNekretnine({ maxPages: portalMax }),
-    searchFourZida({ maxPages })
+    searchNekretnine({ maxPages: portalMax })
   ]);
   let all = [];
   for (const r of settled) if (r.status === "fulfilled") all = all.concat(r.value);
@@ -492,6 +492,9 @@ async function confirmOwners(listings, cap = 30) {
 }
 
 // src/match.ts
+function portalRank(p) {
+  return p === "4zida" ? 0 : p === "oglasi.rs" ? 1 : p === "nekretnine.rs" ? 2 : 3;
+}
 function matchListings(listings, c) {
   const effectiveMax = c.priceMax != null ? c.priceMax * (1 + (c.priceTolerance ?? 0)) : null;
   return listings.filter((l) => {
@@ -511,7 +514,9 @@ function matchListings(listings, c) {
     if (c.roomsMin != null && (l.rooms == null || l.rooms < c.roomsMin)) return false;
     if (c.roomsMax != null && (l.rooms == null || l.rooms > c.roomsMax)) return false;
     return true;
-  }).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+  }).sort(
+    (a, b) => portalRank(a.portal) - portalRank(b.portal) || (a.price ?? Infinity) - (b.price ?? Infinity)
+  );
 }
 
 // src/store.ts
