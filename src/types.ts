@@ -8,8 +8,9 @@ export type Listing = {
   area: number | null; // kvadratura u m²
   rooms: number | null; // broj soba (4zida koristi i 0.5 / 1.5 / 2.5 ...)
   pricePerM2: number | null; // €/m² (izračunato)
-  location: string; // slug kvarta iz URL-a, npr. "novi-sad-centar-stari-grad-..."
-  portal: string; // npr. "4zida"
+  location: string; // slug kvarta (mala slova, bez kvačica), npr. "grbavica", "liman-4"
+  portal: string; // "4zida" | "oglasi.rs" | "nekretnine.rs"
+  seller?: "owner" | "agency" | null; // tip prodavca (null = nepoznato, npr. 4zida)
 };
 
 export type Criteria = {

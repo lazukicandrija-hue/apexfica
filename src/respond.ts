@@ -4,7 +4,7 @@ import type { Criteria, Listing } from "./types.ts";
 import type { Buyer } from "./crm.ts";
 import { getBuyers } from "./crm.ts";
 import { resolveBuyerCriteria, criteriaFromText } from "./resolve.ts";
-import { searchFourZida } from "./portals/fourzida.ts";
+import { searchAllPortals } from "./portals/index.ts";
 import { matchListings } from "./match.ts";
 import {
   getSettings,
@@ -108,7 +108,7 @@ async function handleWatch(t: string, chatId?: number): Promise<string | null> {
     if (chatId == null) return "Ne mogu da postavim praćenje (nedostaje chat).";
     const { criteria, label } = await resolveTarget(add[1].trim());
     criteria.priceTolerance = getSettings().priceTolerance;
-    const all = await searchFourZida({ maxPages: getSettings().maxPages });
+    const all = await searchAllPortals({ maxPages: getSettings().maxPages });
     const current = matchListings(all, criteria);
     const w = addWatch({ label, chatId, criteria, seen: current.map((m) => m.id) });
     return `🔔 Pratim "${label}" (${fmtCriteria(criteria)}).
@@ -141,7 +141,7 @@ async function activeHotMed(): Promise<Buyer[]> {
 // Inicijalno "zapamti zatečeno" za sve hot/med kupce — bez slanja.
 async function baselineBuyers(): Promise<number> {
   const buyers = await activeHotMed();
-  const all = await searchFourZida({ maxPages: getSettings().maxPages });
+  const all = await searchAllPortals({ maxPages: getSettings().maxPages });
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
   for (const b of buyers) {
@@ -243,7 +243,7 @@ export async function handleText(text: string, user?: string, chatId?: number): 
 
   const s = getSettings();
   criteria.priceTolerance = s.priceTolerance;
-  const all = await searchFourZida({ maxPages: s.maxPages });
+  const all = await searchAllPortals({ maxPages: s.maxPages });
   const matches = matchListings(all, criteria);
   if (!matches.length) logEmpty(who, t, criteria);
   return formatReply(who, criteria, all.length, matches, s.resultCount);
@@ -254,7 +254,7 @@ export async function runWatchCycle(send: Send): Promise<void> {
   const watches = getWatches();
   const auto = getSettings().autoChatId;
   if (!watches.length && !auto) return;
-  const all = await searchFourZida({ maxPages: getSettings().maxPages });
+  const all = await searchAllPortals({ maxPages: getSettings().maxPages });
 
   for (const w of watches) {
     const fresh = matchListings(all, w.criteria).filter((m) => !w.seen.includes(m.id));

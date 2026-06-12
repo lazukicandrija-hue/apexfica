@@ -59,7 +59,7 @@ function deburr(s) {
 function roomsToNumber(s) {
   if (!s) return void 0;
   const t = deburr(s).trim();
-  for (const [word, num] of Object.entries(ROOMS)) if (t.includes(word)) return num;
+  for (const [word, num2] of Object.entries(ROOMS)) if (t.includes(word)) return num2;
   const n = Number(t.replace(",", "."));
   return Number.isNaN(n) ? void 0 : n;
 }
@@ -276,6 +276,188 @@ async function searchFourZida(opts = {}) {
   return data;
 }
 
+// src/portals/oglasi.ts
+var UA2 = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+var BASE2 = "https://www.oglasi.rs";
+function sleep2(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+function deburr3(s) {
+  const m = { \u010D: "c", \u0107: "c", \u0161: "s", \u017E: "z", \u0111: "dj" };
+  return s.toLowerCase().replace(/[čćšžđ]/g, (c) => m[c] ?? c);
+}
+function decode(s) {
+  return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+}
+function parseListings2(html) {
+  const out = [];
+  const blocks = html.split(/(?=<article itemprop="itemListElement")/).filter((b) => b.startsWith("<article"));
+  for (const a of blocks) {
+    const href = a.match(/href="(\/oglas\/[^"]+)"/);
+    if (!href) continue;
+    const url = BASE2 + href[1];
+    const id = href[1].match(/\/oglas\/([0-9-]+)\//)?.[1] ?? url;
+    const priceM = a.match(/itemprop="price"[^>]*content="([\d.]+)"/);
+    const price = priceM ? Math.round(Number(priceM[1])) : null;
+    const curM = a.match(/itemprop="priceCurrency"[^>]*content="([A-Z]+)"/);
+    const areaM = a.match(/Kvadratura:[\s\S]*?<strong>\s*([\d.,]+)\s*m/);
+    const area = areaM ? Number(areaM[1].replace(/\./g, "").replace(",", ".")) : null;
+    const roomsM = a.match(/Sobnost:[\s\S]*?<strong>\s*([^<]+?)\s*<\/strong>/);
+    const rooms = roomsM ? roomsToNumber(decode(roomsM[1]).trim()) ?? null : null;
+    const cats = [...a.matchAll(/itemprop="category"[^>]*>([^<]+)<\/a>/g)].map((m) => decode(m[1]).trim());
+    const locationName = cats.length ? cats[cats.length - 1] : "";
+    const citeM = a.match(/<cite>\s*([\s\S]*?)\s*<\/cite>/);
+    const cite = citeM ? decode(citeM[1].replace(/\s+/g, " ")).trim() : "";
+    const seller = /agencij|reg\.\s*br|reg\.\s*pos|d\.?o\.?o/i.test(cite) ? "agency" : "owner";
+    out.push({
+      id,
+      url,
+      price,
+      currency: curM ? curM[1] : price ? "EUR" : null,
+      area: area && !Number.isNaN(area) ? area : null,
+      rooms,
+      pricePerM2: price && area ? Math.round(price / area) : null,
+      location: deburr3(locationName).replace(/\s+/g, "-"),
+      portal: "oglasi.rs",
+      seller
+    });
+  }
+  return out;
+}
+async function searchOglasi(opts = {}) {
+  const ownerOnly = opts.ownerOnly ?? true;
+  const maxPages = opts.maxPages ?? 12;
+  const delayMs = opts.delayMs ?? 1500;
+  const byId = /* @__PURE__ */ new Map();
+  for (let page = 1; page <= maxPages; page++) {
+    const url = `${BASE2}/nekretnine/prodaja-stanova/novi-sad?${ownerOnly ? "rt=vlasnik&" : ""}p=${page}`;
+    let res;
+    try {
+      res = await fetch(url, { headers: { "user-agent": UA2, "accept-language": "sr,en;q=0.9" } });
+    } catch {
+      break;
+    }
+    if (!res.ok) break;
+    const html = await res.text();
+    const listings = parseListings2(html);
+    if (!listings.length) break;
+    let added = 0;
+    for (const l of listings) if (!byId.has(l.id)) byId.set(l.id, l), added++;
+    if (!added) break;
+    const totalM = html.match(/stranica\s*\d+\s*od\s*(\d+)/i);
+    if (totalM && page >= Number(totalM[1])) break;
+    if (page < maxPages) await sleep2(delayMs);
+  }
+  return [...byId.values()];
+}
+
+// src/portals/nekretnine.ts
+var UA3 = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+function sleep3(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+function deburr4(s) {
+  const m = { \u010D: "c", \u0107: "c", \u0161: "s", \u017E: "z", \u0111: "dj" };
+  return s.toLowerCase().replace(/[čćšžđ]/g, (c) => m[c] ?? c);
+}
+function num(v) {
+  if (typeof v === "number") return Number.isNaN(v) ? null : v;
+  if (typeof v === "string") {
+    const n = Number(v.replace(/[^\d.]/g, ""));
+    return Number.isNaN(n) ? null : n;
+  }
+  return null;
+}
+function nextData(html) {
+  const m = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return null;
+  }
+}
+async function searchNekretnine(opts = {}) {
+  const maxPages = opts.maxPages ?? 12;
+  const delayMs = opts.delayMs ?? 1200;
+  const byId = /* @__PURE__ */ new Map();
+  for (let page = 1; page <= maxPages; page++) {
+    const url = `https://www.nekretnine.rs/prodaja-stanova/novi-sad/?pag=${page}`;
+    let res;
+    try {
+      res = await fetch(url, { headers: { "user-agent": UA3, "accept-language": "sr" } });
+    } catch {
+      break;
+    }
+    if (!res.ok) break;
+    const data = nextData(await res.text());
+    const state = data?.props?.pageProps?.dehydratedState?.queries?.[0]?.state?.data;
+    const results = state?.results;
+    if (!Array.isArray(results) || !results.length) break;
+    let added = 0;
+    for (const it of results) {
+      const re = it.realEstate ?? {};
+      const prop = (re.properties ?? [{}])[0] ?? {};
+      const loc = prop.location ?? {};
+      const adv = re.advertiser ?? {};
+      const isPrivate = !adv.agency && adv.supervisor?.type === "user";
+      const urlAd = it.seo?.url ?? "";
+      const id = String(re.id ?? urlAd);
+      if (!urlAd || byId.has(id)) continue;
+      const price = num(re.price?.value);
+      const area = num(prop.surface);
+      byId.set(id, {
+        id,
+        url: urlAd,
+        price,
+        currency: price ? "EUR" : null,
+        area,
+        rooms: num(prop.rooms),
+        pricePerM2: price && area ? Math.round(price / area) : null,
+        location: deburr4(String(loc.microzone ?? loc.macrozone ?? "")).replace(/\s+/g, "-"),
+        portal: "nekretnine.rs",
+        seller: isPrivate ? "owner" : "agency"
+      });
+      added++;
+    }
+    const maxP = num(state.maxPages);
+    if (maxP && page >= maxP) break;
+    if (!added) break;
+    if (page < maxPages) await sleep3(delayMs);
+  }
+  return [...byId.values()];
+}
+
+// src/portals/index.ts
+var CACHE_TTL_MS2 = 5 * 60 * 1e3;
+var cache2 = /* @__PURE__ */ new Map();
+async function searchAllPortals(opts = {}) {
+  const ownerOnly = opts.ownerOnly ?? true;
+  const maxPages = opts.maxPages ?? 18;
+  const key = `${ownerOnly}:${maxPages}`;
+  const hit = cache2.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS2) return hit.data;
+  const portalMax = Math.min(maxPages, 12);
+  const settled = await Promise.allSettled([
+    searchFourZida({ maxPages }),
+    searchOglasi({ ownerOnly, maxPages: portalMax }),
+    searchNekretnine({ maxPages: portalMax })
+  ]);
+  let all = [];
+  for (const r of settled) if (r.status === "fulfilled") all = all.concat(r.value);
+  if (ownerOnly) all = all.filter((l) => l.seller !== "agency");
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const l of all) {
+    const k = `${l.area ?? "?"}|${l.rooms ?? "?"}|${l.price ?? "?"}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(l);
+  }
+  cache2.set(key, { at: Date.now(), data: out });
+  return out;
+}
+
 // src/match.ts
 function matchListings(listings, c) {
   const effectiveMax = c.priceMax != null ? c.priceMax * (1 + (c.priceTolerance ?? 0)) : null;
@@ -482,7 +664,7 @@ async function handleWatch(t, chatId) {
     if (chatId == null) return "Ne mogu da postavim pra\u0107enje (nedostaje chat).";
     const { criteria, label } = await resolveTarget(add[1].trim());
     criteria.priceTolerance = getSettings().priceTolerance;
-    const all = await searchFourZida({ maxPages: getSettings().maxPages });
+    const all = await searchAllPortals({ maxPages: getSettings().maxPages });
     const current = matchListings(all, criteria);
     const w = addWatch({ label, chatId, criteria, seen: current.map((m) => m.id) });
     return `\u{1F514} Pratim "${label}" (${fmtCriteria(criteria)}).
@@ -508,7 +690,7 @@ async function activeHotMed() {
 }
 async function baselineBuyers() {
   const buyers = await activeHotMed();
-  const all = await searchFourZida({ maxPages: getSettings().maxPages });
+  const all = await searchAllPortals({ maxPages: getSettings().maxPages });
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
   for (const b of buyers) {
@@ -598,7 +780,7 @@ async function handleText(text, user, chatId) {
   }
   const s = getSettings();
   criteria.priceTolerance = s.priceTolerance;
-  const all = await searchFourZida({ maxPages: s.maxPages });
+  const all = await searchAllPortals({ maxPages: s.maxPages });
   const matches = matchListings(all, criteria);
   if (!matches.length) logEmpty(who, t, criteria);
   return formatReply(who, criteria, all.length, matches, s.resultCount);
@@ -607,7 +789,7 @@ async function runWatchCycle(send) {
   const watches = getWatches();
   const auto = getSettings().autoChatId;
   if (!watches.length && !auto) return;
-  const all = await searchFourZida({ maxPages: getSettings().maxPages });
+  const all = await searchAllPortals({ maxPages: getSettings().maxPages });
   for (const w of watches) {
     const fresh = matchListings(all, w.criteria).filter((m) => !w.seen.includes(m.id));
     if (!fresh.length) continue;
