@@ -68,11 +68,11 @@ async function main(): Promise<void> {
       await tg("sendMessage", { chat_id: msg.chat.id, text: "🔎 Tražim, momenat..." });
       try {
         const reply = await handleText(msg.text, user, msg.chat.id);
-        await tg("sendMessage", {
-          chat_id: msg.chat.id,
-          text: reply,
-          disable_web_page_preview: true,
-        });
+        const parts = Array.isArray(reply) ? reply : [reply];
+        for (const part of parts) {
+          await tg("sendMessage", { chat_id: msg.chat.id, text: part, disable_web_page_preview: true });
+          if (parts.length > 1) await new Promise((r) => setTimeout(r, 400)); // ljubazno prema Telegram limitu
+        }
       } catch (e) {
         await tg("sendMessage", {
           chat_id: msg.chat.id,

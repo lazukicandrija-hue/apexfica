@@ -637,21 +637,25 @@ function fmtListing(m) {
   return `${price} \xB7 ${m.area ?? "\u2014"}m\xB2 \xB7 ${m.rooms ?? "\u2014"} sob \xB7 ${m.pricePerM2 ?? "\u2014"}\u20AC/m\xB2
 ${m.url}`;
 }
-function formatReply(who, c, poolSize, matches, n) {
+function formatReplies(who, c, poolSize, matches) {
   const head = `\u{1F3E0} ${who}
 ${fmtCriteria(c)}
 
 \u2705 ${matches.length} poklapanja (od ${poolSize} pregledanih):`;
-  const lines = matches.slice(0, n).map((m, i) => `
-
-${i + 1}. ${fmtListing(m)}`);
-  let msg = head + lines.join("");
-  if (matches.length > n) msg += `
-
-\u2026i jo\u0161 ${matches.length - n}. Suzi kriterijume za precizniju listu.`;
-  if (!matches.length) msg += `
-(nema pogodaka \u2014 probaj \u0161ire opsege ili drugi kvart)`;
-  return msg.slice(0, 4e3);
+  if (!matches.length) return [head + "\n(nema pogodaka \u2014 probaj \u0161ire opsege ili drugi kvart)"];
+  const chunks = [];
+  let cur = head;
+  matches.forEach((m, i) => {
+    const line = `${i + 1}. ${fmtListing(m)}`;
+    if ((cur + "\n\n" + line).length > 3900) {
+      chunks.push(cur);
+      cur = line;
+    } else {
+      cur += "\n\n" + line;
+    }
+  });
+  chunks.push(cur);
+  return chunks;
 }
 function handleSettings(t) {
   if (/^\/podesavanja\b/i.test(t)) {
@@ -772,7 +776,7 @@ async function buyerCycle(all, chatId, send, silent) {
     } else {
       const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
       const fresh = await confirmOwners(freshAll);
-      for (const m of fresh.slice(0, 10)) {
+      for (const m of fresh) {
         await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})
 ${fmtListing(m)}`);
       }
@@ -823,7 +827,7 @@ async function handleText(text, user, chatId) {
   const all = await searchAllPortals({ maxPages: s.maxPages });
   const matches = await confirmOwners(matchListings(all, criteria));
   if (!matches.length) logEmpty(who, t, criteria);
-  return formatReply(who, criteria, all.length, matches, s.resultCount);
+  return formatReplies(who, criteria, all.length, matches);
 }
 var primed = false;
 async function runWatchCycle(send) {
@@ -842,7 +846,7 @@ async function runWatchCycle(send) {
     const freshAll = matches.filter((m) => !w.seen.includes(m.id));
     if (!freshAll.length) continue;
     const fresh = await confirmOwners(freshAll);
-    for (const m of fresh.slice(0, 10)) await send(w.chatId, `\u{1F514} NOVO za "${w.label}"
+    for (const m of fresh) await send(w.chatId, `\u{1F514} NOVO za "${w.label}"
 ${fmtListing(m)}`);
     updateWatchSeen(w.id, [...w.seen, ...freshAll.map((m) => m.id)]);
   }
@@ -907,11 +911,11 @@ async function main() {
       await tg("sendMessage", { chat_id: msg.chat.id, text: "\u{1F50E} Tra\u017Eim, momenat..." });
       try {
         const reply = await handleText(msg.text, user, msg.chat.id);
-        await tg("sendMessage", {
-          chat_id: msg.chat.id,
-          text: reply,
-          disable_web_page_preview: true
-        });
+        const parts = Array.isArray(reply) ? reply : [reply];
+        for (const part of parts) {
+          await tg("sendMessage", { chat_id: msg.chat.id, text: part, disable_web_page_preview: true });
+          if (parts.length > 1) await new Promise((r) => setTimeout(r, 400));
+        }
       } catch (e) {
         await tg("sendMessage", {
           chat_id: msg.chat.id,

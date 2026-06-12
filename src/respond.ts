@@ -53,13 +53,24 @@ function fmtListing(m: Listing): string {
   return `${price} · ${m.area ?? "—"}m² · ${m.rooms ?? "—"} sob · ${m.pricePerM2 ?? "—"}€/m²\n${m.url}`;
 }
 
-function formatReply(who: string, c: Criteria, poolSize: number, matches: Listing[], n: number): string {
+// Vraća SVE pogotke, podeljene u više poruka (Telegram limit ~4096 znakova).
+function formatReplies(who: string, c: Criteria, poolSize: number, matches: Listing[]): string[] {
   const head = `🏠 ${who}\n${fmtCriteria(c)}\n\n✅ ${matches.length} poklapanja (od ${poolSize} pregledanih):`;
-  const lines = matches.slice(0, n).map((m, i) => `\n\n${i + 1}. ${fmtListing(m)}`);
-  let msg = head + lines.join("");
-  if (matches.length > n) msg += `\n\n…i još ${matches.length - n}. Suzi kriterijume za precizniju listu.`;
-  if (!matches.length) msg += `\n(nema pogodaka — probaj šire opsege ili drugi kvart)`;
-  return msg.slice(0, 4000);
+  if (!matches.length) return [head + "\n(nema pogodaka — probaj šire opsege ili drugi kvart)"];
+
+  const chunks: string[] = [];
+  let cur = head;
+  matches.forEach((m, i) => {
+    const line = `${i + 1}. ${fmtListing(m)}`;
+    if ((cur + "\n\n" + line).length > 3900) {
+      chunks.push(cur);
+      cur = line;
+    } else {
+      cur += "\n\n" + line;
+    }
+  });
+  chunks.push(cur);
+  return chunks;
 }
 
 function handleSettings(t: string): string | null {
@@ -196,7 +207,7 @@ async function buyerCycle(all: Listing[], chatId: number, send: Send, silent: bo
     } else {
       const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
       const fresh = await confirmOwners(freshAll); // proveri 4zida vlasnike samo na novim
-      for (const m of fresh.slice(0, 10)) {
+      for (const m of fresh) {
         await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})\n${fmtListing(m)}`);
       }
       if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
@@ -208,7 +219,7 @@ async function buyerCycle(all: Listing[], chatId: number, send: Send, silent: bo
   saveBuyerMonitor(monitor);
 }
 
-export async function handleText(text: string, user?: string, chatId?: number): Promise<string> {
+export async function handleText(text: string, user?: string, chatId?: number): Promise<string | string[]> {
   const t = text.trim();
   if (!t || /^\/(start|help)\b/i.test(t)) return HELP;
 
@@ -253,7 +264,7 @@ export async function handleText(text: string, user?: string, chatId?: number): 
   const all = await searchAllPortals({ maxPages: s.maxPages });
   const matches = await confirmOwners(matchListings(all, criteria));
   if (!matches.length) logEmpty(who, t, criteria);
-  return formatReply(who, criteria, all.length, matches, s.resultCount);
+  return formatReplies(who, criteria, all.length, matches);
 }
 
 // Pozadinska provera: ručna praćenja + auto HOT/MED kupci. Šalje samo NOVE oglase.
@@ -279,7 +290,7 @@ export async function runWatchCycle(send: Send): Promise<void> {
     const freshAll = matches.filter((m) => !w.seen.includes(m.id));
     if (!freshAll.length) continue;
     const fresh = await confirmOwners(freshAll);
-    for (const m of fresh.slice(0, 10)) await send(w.chatId, `🔔 NOVO za "${w.label}"\n${fmtListing(m)}`);
+    for (const m of fresh) await send(w.chatId, `🔔 NOVO za "${w.label}"\n${fmtListing(m)}`);
     updateWatchSeen(w.id, [...w.seen, ...freshAll.map((m) => m.id)]);
   }
 
