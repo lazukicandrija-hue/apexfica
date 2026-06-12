@@ -14,6 +14,11 @@
 *.db-shm
 /data
 
+# runtime fajlovi (prave se na serveru, ne idu u git)
+settings.json
+predlozi.txt
+prazne-pretrage.txt
+
 # klonirani referentni repoi (CRM + sajt) — nisu deo Fice
 /_reference
 

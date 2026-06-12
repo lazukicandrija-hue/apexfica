@@ -52,7 +52,7 @@ async function main(): Promise<void> {
 
       await tg("sendMessage", { chat_id: msg.chat.id, text: "🔎 Tražim, momenat..." });
       try {
-        const reply = await handleText(msg.text);
+        const reply = await handleText(msg.text, user);
         await tg("sendMessage", {
           chat_id: msg.chat.id,
           text: reply,

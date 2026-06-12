@@ -3,8 +3,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 function loadEnv() {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [join(here, "..", ".env"), join(process.cwd(), ".env")];
+  const here2 = dirname(fileURLToPath(import.meta.url));
+  const candidates = [join(here2, "..", ".env"), join(process.cwd(), ".env")];
   for (const path of candidates) {
     if (!existsSync(path)) continue;
     for (const line of readFileSync(path, "utf8").split("\n")) {
@@ -284,17 +284,71 @@ function matchListings(listings, c) {
   }).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 }
 
-// src/respond.ts
-var HELP = `\u{1F44B} Ja sam Fica. Mogu da tra\u017Eim stanove na 4zida.
+// src/store.ts
+import { readFileSync as readFileSync2, writeFileSync, existsSync as existsSync2, appendFileSync } from "node:fs";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { dirname as dirname2, join as join2 } from "node:path";
+var here = dirname2(fileURLToPath2(import.meta.url));
+var ROOT = here.endsWith("dist") || here.endsWith("src") ? join2(here, "..") : here;
+var SETTINGS_FILE = join2(ROOT, "settings.json");
+var SUGGESTIONS_FILE = join2(ROOT, "predlozi.txt");
+var EMPTY_LOG = join2(ROOT, "prazne-pretrage.txt");
+var DEFAULTS = { priceTolerance: 0, resultCount: 8, maxPages: 18 };
+function getSettings() {
+  try {
+    if (existsSync2(SETTINGS_FILE)) {
+      return { ...DEFAULTS, ...JSON.parse(readFileSync2(SETTINGS_FILE, "utf8")) };
+    }
+  } catch {
+  }
+  return { ...DEFAULTS };
+}
+function setSetting(key, value) {
+  const s = getSettings();
+  s[key] = value;
+  writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2));
+}
+function addSuggestion(user, text) {
+  appendFileSync(SUGGESTIONS_FILE, `[${(/* @__PURE__ */ new Date()).toISOString()}] @${user}: ${text}
+`);
+}
+function listSuggestions(limit = 20) {
+  try {
+    if (!existsSync2(SUGGESTIONS_FILE)) return [];
+    return readFileSync2(SUGGESTIONS_FILE, "utf8").trim().split("\n").filter(Boolean).slice(-limit);
+  } catch {
+    return [];
+  }
+}
+function logEmpty(who, query, criteria) {
+  try {
+    appendFileSync(
+      EMPTY_LOG,
+      `[${(/* @__PURE__ */ new Date()).toISOString()}] ${who} | "${query}" | ${JSON.stringify(criteria)}
+`
+    );
+  } catch {
+  }
+}
 
-\u2022 Slobodna pretraga \u2014 samo opi\u0161i \u0161ta tra\u017Ei\u0161:
+// src/respond.ts
+var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
+
+\u{1F50E} Slobodna pretraga \u2014 opi\u0161i \u0161ta tra\u017Ei\u0161:
    "dvosoban Liman do 130k"
    "stan 50-60m2 centar, bud\u017Eet 120000, ne Telep"
 
-\u2022 Po kupcu iz CRM-a:
-   "za Smiljka"   ili   /kupac Smiljka
+\u{1F464} Po kupcu iz CRM-a:
+   "za Smiljka"  \xB7  /kupac Smiljka  \xB7  /kupci (lista)
 
-\u2022 /kupci \u2014 lista aktivnih kupaca`;
+\u2699\uFE0F Pode\u0161avanja (menja\u0161 sam):
+   /podesavanja \u2014 prika\u017Ei trenutna
+   /podesi tolerancija 10 \u2014 dozvoli +10% preko bud\u017Eeta
+   /podesi rezultata 12  \xB7  /podesi dubina 25
+
+\u{1F4DD} Predlozi:
+   /predlog <\u0161ta bi voleo da Fica radi>
+   /predlozi \u2014 lista zabele\u017Eenih`;
 function fmtCriteria(c) {
   const p = [];
   if (c.location) p.push(`\u{1F4CD} ${c.location}`);
@@ -306,12 +360,12 @@ function fmtCriteria(c) {
   if (c.roomsMin != null) p.push(`\u{1F6AA} ${c.roomsMin} sob`);
   return p.join(" \xB7 ") || "(bez filtera)";
 }
-function formatReply(who, c, poolSize, matches) {
+function formatReply(who, c, poolSize, matches, resultCount) {
   const head = `\u{1F3E0} ${who}
 ${fmtCriteria(c)}
 
 \u2705 ${matches.length} poklapanja (od ${poolSize} pregledanih):`;
-  const lines = matches.slice(0, 8).map((m, i) => {
+  const lines = matches.slice(0, resultCount).map((m, i) => {
     const price = m.price != null ? `${m.price.toLocaleString("sr-RS")}\u20AC` : "\u2014";
     return `
 
@@ -319,16 +373,62 @@ ${i + 1}. ${price} \xB7 ${m.area ?? "\u2014"}m\xB2 \xB7 ${m.rooms ?? "\u2014"} s
 ${m.url}`;
   });
   let msg = head + lines.join("");
-  if (matches.length > 8) msg += `
+  if (matches.length > resultCount)
+    msg += `
 
-\u2026i jo\u0161 ${matches.length - 8}. Suzi kriterijume za precizniju listu.`;
+\u2026i jo\u0161 ${matches.length - resultCount}. Suzi kriterijume za precizniju listu.`;
   if (!matches.length) msg += `
 (nema pogodaka \u2014 probaj \u0161ire opsege ili drugi kvart)`;
   return msg.slice(0, 4e3);
 }
-async function handleText(text) {
+function handleSettings(t) {
+  if (/^\/podesavanja\b/i.test(t)) {
+    const s = getSettings();
+    return `\u2699\uFE0F Trenutna pode\u0161avanja:
+\u2022 tolerancija bud\u017Eeta: +${Math.round(s.priceTolerance * 100)}%
+\u2022 broj rezultata: ${s.resultCount}
+\u2022 dubina pretrage: ${s.maxPages} strana
+
+Promena: /podesi <ime> <broj>
+   /podesi tolerancija 10
+   /podesi rezultata 12
+   /podesi dubina 25`;
+  }
+  const m = t.match(/^\/podesi\s+(\w+)\s+(\d+)/i);
+  if (!m) return null;
+  const key = m[1].toLowerCase();
+  const val = Number(m[2]);
+  if (key.startsWith("toleranc")) {
+    const pct = Math.min(val, 100);
+    setSetting("priceTolerance", pct / 100);
+    return `\u2705 Tolerancija bud\u017Eeta: +${pct}%`;
+  }
+  if (key.startsWith("rezultat")) {
+    const n = Math.max(1, Math.min(val, 30));
+    setSetting("resultCount", n);
+    return `\u2705 Broj rezultata: ${n}`;
+  }
+  if (key.startsWith("dubin")) {
+    const n = Math.max(1, Math.min(val, 40));
+    setSetting("maxPages", n);
+    return `\u2705 Dubina pretrage: ${n} strana`;
+  }
+  return `Ne znam pode\u0161avanje "${key}". Probaj: tolerancija, rezultata, dubina.`;
+}
+async function handleText(text, user) {
   const t = text.trim();
   if (!t || /^\/(start|help)\b/i.test(t)) return HELP;
+  const settingsReply = handleSettings(t);
+  if (settingsReply) return settingsReply;
+  const sug = t.match(/^\/predlog\s+([\s\S]+)/i);
+  if (sug) {
+    addSuggestion(user ?? "?", sug[1].trim());
+    return "\u{1F4DD} Zabele\u017Eeno, hvala! Predlog je sa\u010Duvan.";
+  }
+  if (/^\/predlozi\b/i.test(t)) {
+    const list = listSuggestions(20);
+    return list.length ? "\u{1F4CB} Predlozi:\n" + list.join("\n") : "Nema zabele\u017Eenih predloga jo\u0161.";
+  }
   if (/^\/kupci\b/i.test(t)) {
     const buyers = await getBuyers({ status: "Aktivan" });
     return `\u{1F465} Aktivnih kupaca: ${buyers.length}
@@ -350,9 +450,12 @@ async function handleText(text) {
     criteria = await criteriaFromText(t);
     who = "Slobodna pretraga";
   }
-  const all = await searchFourZida({ maxPages: 18 });
+  const s = getSettings();
+  criteria.priceTolerance = s.priceTolerance;
+  const all = await searchFourZida({ maxPages: s.maxPages });
   const matches = matchListings(all, criteria);
-  return formatReply(who, criteria, all.length, matches);
+  if (!matches.length) logEmpty(who, t, criteria);
+  return formatReply(who, criteria, all.length, matches, s.resultCount);
 }
 
 // src/bot.ts
@@ -398,7 +501,7 @@ async function main() {
       }
       await tg("sendMessage", { chat_id: msg.chat.id, text: "\u{1F50E} Tra\u017Eim, momenat..." });
       try {
-        const reply = await handleText(msg.text);
+        const reply = await handleText(msg.text, user);
         await tg("sendMessage", {
           chat_id: msg.chat.id,
           text: reply,
