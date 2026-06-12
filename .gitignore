@@ -1,8 +1,7 @@
 # dependencies
 /node_modules
 
-# build
-/dist
+# build output: dist/bot.js JE u repou (server ga samo pokrene, bez build koraka)
 
 # secrets — NIKAD u commit (repoi su javni!)
 .env
