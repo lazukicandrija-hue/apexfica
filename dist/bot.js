@@ -309,7 +309,8 @@ var SETTINGS_FILE = join2(ROOT, "settings.json");
 var SUGGESTIONS_FILE = join2(ROOT, "predlozi.txt");
 var EMPTY_LOG = join2(ROOT, "prazne-pretrage.txt");
 var WATCHES_FILE = join2(ROOT, "watches.json");
-var DEFAULTS = { priceTolerance: 0, resultCount: 8, maxPages: 18 };
+var MONITOR_FILE = join2(ROOT, "buyer-monitor.json");
+var DEFAULTS = { priceTolerance: 0, resultCount: 8, maxPages: 18, autoChatId: 0 };
 function getSettings() {
   try {
     if (existsSync2(SETTINGS_FILE)) {
@@ -378,36 +379,42 @@ function updateWatchSeen(id, seen) {
   w.seen = seen.slice(-300);
   saveWatches(all);
 }
+function getBuyerMonitor() {
+  try {
+    if (existsSync2(MONITOR_FILE)) {
+      return JSON.parse(readFileSync2(MONITOR_FILE, "utf8"));
+    }
+  } catch {
+  }
+  return {};
+}
+function saveBuyerMonitor(map) {
+  writeFileSync(MONITOR_FILE, JSON.stringify(map, null, 2));
+}
 
 // src/respond.ts
 var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
 
-\u{1F50E} Slobodna pretraga \u2014 opi\u0161i \u0161ta tra\u017Ei\u0161:
-   "dvosoban Liman do 130k"
-   "stan 50-60m2 centar, bud\u017Eet 120000, ne Telep"
+\u{1F50E} Slobodna pretraga: "dvosoban Liman do 130k" \xB7 "stan 50-60m2 centar do 120000, ne Telep"
+\u{1F464} Po kupcu: "za Smiljka" \xB7 /kupac Smiljka \xB7 /kupci
 
-\u{1F464} Po kupcu iz CRM-a:
-   "za Smiljka"  \xB7  /kupac Smiljka  \xB7  /kupci (lista)
+\u{1F916} Auto-pra\u0107enje HOT/MED kupaca:
+   /auto on \u2014 Fica sam prati sve hot/med kupce i javlja OVDE \u010Dim isko\u010Di novo
+   /auto off \xB7 /auto (status)
 
-\u{1F514} Aktivno pra\u0107enje (javim \u010Dim isko\u010Di NOV oglas):
-   /prati Smiljka \u2014 prati kupca iz CRM-a
-   /prati dvosoban centar 130000-150000 \u2014 slobodno
-   /pratnje (lista)  \xB7  /prekini w1 (stop)
+\u{1F514} Ru\u010Dno pra\u0107enje:
+   /prati Smiljka \xB7 /prati dvosoban centar 130000-150000 \xB7 /pratnje \xB7 /prekini w1
 
-\u2699\uFE0F Pode\u0161avanja:
-   /podesavanja  \xB7  /podesi tolerancija 10  \xB7  /podesi rezultata 12  \xB7  /podesi dubina 25
-
-\u{1F4DD} Predlozi:
-   /predlog <\u0161ta bi voleo da Fica radi>  \xB7  /predlozi`;
+\u2699\uFE0F /podesavanja \xB7 /podesi tolerancija 10 \xB7 /podesi rezultata 12 \xB7 /podesi dubina 25
+\u{1F4DD} /predlog <ideja> \xB7 /predlozi`;
 function fmtCriteria(c) {
   const p = [];
-  if (c.location) p.push(`\u{1F4CD} ${c.location}`);
+  const locs = c.locations?.length ? c.locations.join(", ") : c.location;
+  if (locs) p.push(`\u{1F4CD} ${locs}`);
   if (c.excludeLocations?.length) p.push(`\u26D4 ${c.excludeLocations.join(", ")}`);
-  if (c.priceMin != null || c.priceMax != null)
-    p.push(`\u{1F4B6} ${c.priceMin ?? 0}\u2013${c.priceMax ?? "\u221E"}\u20AC`);
-  if (c.areaMin != null || c.areaMax != null)
-    p.push(`\u{1F4D0} ${c.areaMin ?? 0}\u2013${c.areaMax ?? "\u221E"}m\xB2`);
-  if (c.roomsMin != null) p.push(`\u{1F6AA} ${c.roomsMin} sob`);
+  if (c.priceMin != null || c.priceMax != null) p.push(`\u{1F4B6} ${c.priceMin ?? 0}\u2013${c.priceMax ?? "\u221E"}\u20AC`);
+  if (c.areaMin != null || c.areaMax != null) p.push(`\u{1F4D0} ${c.areaMin ?? 0}\u2013${c.areaMax ?? "\u221E"}m\xB2`);
+  if (c.roomsMin != null) p.push(`\u{1F6AA} ${c.roomsMin}${c.roomsMax && c.roomsMax !== c.roomsMin ? "\u2013" + c.roomsMax : ""} sob`);
   return p.join(" \xB7 ") || "(bez filtera)";
 }
 function fmtListing(m) {
@@ -438,9 +445,9 @@ function handleSettings(t) {
 \u2022 tolerancija bud\u017Eeta: +${Math.round(s.priceTolerance * 100)}%
 \u2022 broj rezultata: ${s.resultCount}
 \u2022 dubina pretrage: ${s.maxPages} strana
+\u2022 auto-pra\u0107enje HOT/MED: ${s.autoChatId ? "uklju\u010Deno" : "isklju\u010Deno"}
 
-Promena: /podesi <ime> <broj>
-   /podesi tolerancija 10  \xB7  /podesi rezultata 12  \xB7  /podesi dubina 25`;
+Promena: /podesi tolerancija 10 \xB7 /podesi rezultata 12 \xB7 /podesi dubina 25`;
   }
   const m = t.match(/^\/podesi\s+(\w+)\s+(\d+)/i);
   if (!m) return null;
@@ -465,9 +472,7 @@ Promena: /podesi <ime> <broj>
 }
 async function resolveTarget(arg) {
   const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
-  const b = buyers.find(
-    (x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(arg.toLowerCase())
-  );
+  const b = buyers.find((x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(arg.toLowerCase()));
   if (b) return { criteria: await resolveBuyerCriteria(b), label: `${b.first_name} ${b.last_name}` };
   return { criteria: await criteriaFromText(arg), label: arg };
 }
@@ -486,7 +491,7 @@ ID: ${w.id} \u2014 zaustavi sa /prekini ${w.id}`;
   }
   if (/^\/pratnje\b/i.test(t)) {
     const ws = getWatches();
-    return ws.length ? "\u{1F514} Aktivna pra\u0107enja:\n" + ws.map((w) => `\u2022 ${w.id}: ${w.label} (${fmtCriteria(w.criteria)})`).join("\n") + "\n\nStop: /prekini <id>" : "Nema aktivnih pra\u0107enja. Dodaj sa: /prati <kupac ili opis>";
+    return ws.length ? "\u{1F514} Aktivna pra\u0107enja:\n" + ws.map((w) => `\u2022 ${w.id}: ${w.label} (${fmtCriteria(w.criteria)})`).join("\n") + "\n\nStop: /prekini <id>" : "Nema ru\u010Dnih pra\u0107enja. Dodaj: /prati <kupac ili opis>";
   }
   const stop = t.match(/^\/prekini\s+(\w+)/i);
   if (stop) {
@@ -494,11 +499,76 @@ ID: ${w.id} \u2014 zaustavi sa /prekini ${w.id}`;
   }
   return null;
 }
+function buyerText(b) {
+  return [b.location, b.notes, b.desired_rooms, b.preferred_locations, b.budget].join("|");
+}
+async function activeHotMed() {
+  const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
+  return buyers.filter((b) => ["hot", "medium"].includes(String(b.priority ?? "").toLowerCase()));
+}
+async function baselineBuyers() {
+  const buyers = await activeHotMed();
+  const all = await searchFourZida({ maxPages: getSettings().maxPages });
+  const tol = getSettings().priceTolerance;
+  const monitor = getBuyerMonitor();
+  for (const b of buyers) {
+    const criteria = await resolveBuyerCriteria(b);
+    criteria.priceTolerance = tol;
+    monitor[b.id] = { text: buyerText(b), criteria, seen: matchListings(all, criteria).map((m) => m.id) };
+  }
+  const ids = new Set(buyers.map((b) => b.id));
+  for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
+  saveBuyerMonitor(monitor);
+  return buyers.length;
+}
+async function handleAuto(t, chatId) {
+  const m = t.match(/^\/auto\b\s*(\w+)?/i);
+  if (!m) return null;
+  const arg = (m[1] ?? "").toLowerCase();
+  if (arg === "on") {
+    if (chatId == null) return "Ne mogu (nedostaje chat).";
+    setSetting("autoChatId", chatId);
+    const n = await baselineBuyers();
+    return `\u2705 Auto-pra\u0107enje uklju\u010Deno. Pratim ${n} HOT/MED kupaca; alarmi sti\u017Eu OVDE. Javi\u0107u za svaki NOV oglas (zate\u010Dene ne brojim kao nove).`;
+  }
+  if (arg === "off") {
+    setSetting("autoChatId", 0);
+    return "Auto-pra\u0107enje HOT/MED kupaca isklju\u010Deno.";
+  }
+  const cur = getSettings().autoChatId;
+  return cur ? "Auto-pra\u0107enje je UKLJU\u010CENO. /auto off da isklju\u010Di\u0161." : "Auto-pra\u0107enje je isklju\u010Deno. /auto on da uklju\u010Di\u0161 (alarmi sti\u017Eu u chat gde to ukuca\u0161).";
+}
+async function buyerCycle(all, chatId, send) {
+  const buyers = await activeHotMed();
+  const tol = getSettings().priceTolerance;
+  const monitor = getBuyerMonitor();
+  for (const b of buyers) {
+    let entry = monitor[b.id];
+    if (!entry || entry.text !== buyerText(b)) {
+      const criteria = await resolveBuyerCriteria(b);
+      criteria.priceTolerance = tol;
+      monitor[b.id] = { text: buyerText(b), criteria, seen: matchListings(all, criteria).map((m) => m.id) };
+      continue;
+    }
+    entry.criteria.priceTolerance = tol;
+    const fresh = matchListings(all, entry.criteria).filter((m) => !entry.seen.includes(m.id));
+    for (const m of fresh.slice(0, 10)) {
+      await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})
+${fmtListing(m)}`);
+    }
+    if (fresh.length) entry.seen = [...entry.seen, ...fresh.map((m) => m.id)].slice(-300);
+  }
+  const ids = new Set(buyers.map((b) => b.id));
+  for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
+  saveBuyerMonitor(monitor);
+}
 async function handleText(text, user, chatId) {
   const t = text.trim();
   if (!t || /^\/(start|help)\b/i.test(t)) return HELP;
   const settingsReply = handleSettings(t);
   if (settingsReply) return settingsReply;
+  const autoReply = await handleAuto(t, chatId);
+  if (autoReply) return autoReply;
   const watchReply = await handleWatch(t, chatId);
   if (watchReply) return watchReply;
   const sug = t.match(/^\/predlog\s+([\s\S]+)/i);
@@ -519,9 +589,9 @@ async function handleText(text, user, chatId) {
   let who;
   const byBuyer = t.match(/^(?:\/kupac\s+|za\s+)(.+)/i);
   if (byBuyer) {
-    const { criteria: c, label } = await resolveTarget(byBuyer[1].trim());
-    criteria = c;
-    who = label;
+    const r = await resolveTarget(byBuyer[1].trim());
+    criteria = r.criteria;
+    who = r.label;
   } else {
     criteria = await criteriaFromText(t);
     who = "Slobodna pretraga";
@@ -535,18 +605,17 @@ async function handleText(text, user, chatId) {
 }
 async function runWatchCycle(send) {
   const watches = getWatches();
-  if (!watches.length) return;
+  const auto = getSettings().autoChatId;
+  if (!watches.length && !auto) return;
   const all = await searchFourZida({ maxPages: getSettings().maxPages });
   for (const w of watches) {
-    const matches = matchListings(all, w.criteria);
-    const fresh = matches.filter((m) => !w.seen.includes(m.id));
+    const fresh = matchListings(all, w.criteria).filter((m) => !w.seen.includes(m.id));
     if (!fresh.length) continue;
-    for (const m of fresh.slice(0, 10)) {
-      await send(w.chatId, `\u{1F514} NOVO za "${w.label}"
+    for (const m of fresh.slice(0, 10)) await send(w.chatId, `\u{1F514} NOVO za "${w.label}"
 ${fmtListing(m)}`);
-    }
     updateWatchSeen(w.id, [...w.seen, ...fresh.map((m) => m.id)]);
   }
+  if (auto) await buyerCycle(all, auto, send);
 }
 
 // src/bot.ts
@@ -576,6 +645,12 @@ async function main() {
       })
     ).catch((e) => console.error("watch cycle:", e?.message ?? e));
   }, CHECK_MIN * 6e4);
+  setTimeout(() => {
+    runWatchCycle(
+      (chatId, text) => tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true }).then(() => {
+      })
+    ).catch((e) => console.error("watch cycle (init):", e?.message ?? e));
+  }, 25e3);
   console.log(`\u{1F514} Pra\u0107enja se proveravaju svakih ${CHECK_MIN} min.`);
   let offset = 0;
   for (; ; ) {

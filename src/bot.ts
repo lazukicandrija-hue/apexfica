@@ -34,6 +34,12 @@ async function main(): Promise<void> {
       tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true }).then(() => {}),
     ).catch((e) => console.error("watch cycle:", e?.message ?? e));
   }, CHECK_MIN * 60_000);
+  // prvi prolaz ubrzo po startu (npr. posle deploy-a) — da se baseline/alarmi ne čekaju ceo interval
+  setTimeout(() => {
+    runWatchCycle((chatId, text) =>
+      tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true }).then(() => {}),
+    ).catch((e) => console.error("watch cycle (init):", e?.message ?? e));
+  }, 25_000);
   console.log(`🔔 Praćenja se proveravaju svakih ${CHECK_MIN} min.`);
 
   let offset = 0;

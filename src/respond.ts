@@ -1,6 +1,7 @@
 // Mozak bota: tekst poruke -> (komande / CRM / parse) -> 4zida -> formatiran odgovor.
-// Plus aktivno praćenje (watches): runWatchCycle() proverava i šalje NOVE oglase.
+// + ručno praćenje (/prati) i auto-praćenje HOT/MED kupaca (/auto) sa alarmima za NOVE oglase.
 import type { Criteria, Listing } from "./types.ts";
+import type { Buyer } from "./crm.ts";
 import { getBuyers } from "./crm.ts";
 import { resolveBuyerCriteria, criteriaFromText } from "./resolve.ts";
 import { searchFourZida } from "./portals/fourzida.ts";
@@ -15,37 +16,35 @@ import {
   addWatch,
   removeWatch,
   updateWatchSeen,
+  getBuyerMonitor,
+  saveBuyerMonitor,
 } from "./store.ts";
+
+type Send = (chatId: number, text: string) => Promise<void>;
 
 const HELP = `👋 Ja sam Fica. Tražim stanove na 4zida.
 
-🔎 Slobodna pretraga — opiši šta tražiš:
-   "dvosoban Liman do 130k"
-   "stan 50-60m2 centar, budžet 120000, ne Telep"
+🔎 Slobodna pretraga: "dvosoban Liman do 130k" · "stan 50-60m2 centar do 120000, ne Telep"
+👤 Po kupcu: "za Smiljka" · /kupac Smiljka · /kupci
 
-👤 Po kupcu iz CRM-a:
-   "za Smiljka"  ·  /kupac Smiljka  ·  /kupci (lista)
+🤖 Auto-praćenje HOT/MED kupaca:
+   /auto on — Fica sam prati sve hot/med kupce i javlja OVDE čim iskoči novo
+   /auto off · /auto (status)
 
-🔔 Aktivno praćenje (javim čim iskoči NOV oglas):
-   /prati Smiljka — prati kupca iz CRM-a
-   /prati dvosoban centar 130000-150000 — slobodno
-   /pratnje (lista)  ·  /prekini w1 (stop)
+🔔 Ručno praćenje:
+   /prati Smiljka · /prati dvosoban centar 130000-150000 · /pratnje · /prekini w1
 
-⚙️ Podešavanja:
-   /podesavanja  ·  /podesi tolerancija 10  ·  /podesi rezultata 12  ·  /podesi dubina 25
-
-📝 Predlozi:
-   /predlog <šta bi voleo da Fica radi>  ·  /predlozi`;
+⚙️ /podesavanja · /podesi tolerancija 10 · /podesi rezultata 12 · /podesi dubina 25
+📝 /predlog <ideja> · /predlozi`;
 
 function fmtCriteria(c: Criteria): string {
   const p: string[] = [];
-  if (c.location) p.push(`📍 ${c.location}`);
+  const locs = c.locations?.length ? c.locations.join(", ") : c.location;
+  if (locs) p.push(`📍 ${locs}`);
   if (c.excludeLocations?.length) p.push(`⛔ ${c.excludeLocations.join(", ")}`);
-  if (c.priceMin != null || c.priceMax != null)
-    p.push(`💶 ${c.priceMin ?? 0}–${c.priceMax ?? "∞"}€`);
-  if (c.areaMin != null || c.areaMax != null)
-    p.push(`📐 ${c.areaMin ?? 0}–${c.areaMax ?? "∞"}m²`);
-  if (c.roomsMin != null) p.push(`🚪 ${c.roomsMin} sob`);
+  if (c.priceMin != null || c.priceMax != null) p.push(`💶 ${c.priceMin ?? 0}–${c.priceMax ?? "∞"}€`);
+  if (c.areaMin != null || c.areaMax != null) p.push(`📐 ${c.areaMin ?? 0}–${c.areaMax ?? "∞"}m²`);
+  if (c.roomsMin != null) p.push(`🚪 ${c.roomsMin}${c.roomsMax && c.roomsMax !== c.roomsMin ? "–" + c.roomsMax : ""} sob`);
   return p.join(" · ") || "(bez filtera)";
 }
 
@@ -70,9 +69,9 @@ function handleSettings(t: string): string | null {
 • tolerancija budžeta: +${Math.round(s.priceTolerance * 100)}%
 • broj rezultata: ${s.resultCount}
 • dubina pretrage: ${s.maxPages} strana
+• auto-praćenje HOT/MED: ${s.autoChatId ? "uključeno" : "isključeno"}
 
-Promena: /podesi <ime> <broj>
-   /podesi tolerancija 10  ·  /podesi rezultata 12  ·  /podesi dubina 25`;
+Promena: /podesi tolerancija 10 · /podesi rezultata 12 · /podesi dubina 25`;
   }
   const m = t.match(/^\/podesi\s+(\w+)\s+(\d+)/i);
   if (!m) return null;
@@ -96,18 +95,14 @@ Promena: /podesi <ime> <broj>
   return `Ne znam podešavanje "${key}". Probaj: tolerancija, rezultata, dubina.`;
 }
 
-// Pretvori argument (ime kupca ili slobodan tekst) u kriterijume + labelu.
 async function resolveTarget(arg: string): Promise<{ criteria: Criteria; label: string }> {
   const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
-  const b = buyers.find((x) =>
-    `${x.first_name} ${x.last_name}`.toLowerCase().includes(arg.toLowerCase()),
-  );
+  const b = buyers.find((x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(arg.toLowerCase()));
   if (b) return { criteria: await resolveBuyerCriteria(b), label: `${b.first_name} ${b.last_name}` };
   return { criteria: await criteriaFromText(arg), label: arg };
 }
 
 async function handleWatch(t: string, chatId?: number): Promise<string | null> {
-  // /prati <kupac ili tekst>
   const add = t.match(/^\/prati\s+(.+)/is);
   if (add) {
     if (chatId == null) return "Ne mogu da postavim praćenje (nedostaje chat).";
@@ -123,18 +118,87 @@ ID: ${w.id} — zaustavi sa /prekini ${w.id}`;
   if (/^\/pratnje\b/i.test(t)) {
     const ws = getWatches();
     return ws.length
-      ? "🔔 Aktivna praćenja:\n" +
-          ws.map((w) => `• ${w.id}: ${w.label} (${fmtCriteria(w.criteria)})`).join("\n") +
-          "\n\nStop: /prekini <id>"
-      : "Nema aktivnih praćenja. Dodaj sa: /prati <kupac ili opis>";
+      ? "🔔 Aktivna praćenja:\n" + ws.map((w) => `• ${w.id}: ${w.label} (${fmtCriteria(w.criteria)})`).join("\n") + "\n\nStop: /prekini <id>"
+      : "Nema ručnih praćenja. Dodaj: /prati <kupac ili opis>";
   }
   const stop = t.match(/^\/prekini\s+(\w+)/i);
   if (stop) {
-    return removeWatch(stop[1])
-      ? `✅ Praćenje ${stop[1]} zaustavljeno.`
-      : `Nema praćenja "${stop[1]}". /pratnje za listu.`;
+    return removeWatch(stop[1]) ? `✅ Praćenje ${stop[1]} zaustavljeno.` : `Nema praćenja "${stop[1]}". /pratnje za listu.`;
   }
   return null;
+}
+
+// ── Auto-praćenje HOT/MED kupaca ──
+function buyerText(b: Buyer): string {
+  return [b.location, b.notes, b.desired_rooms, b.preferred_locations, b.budget].join("|");
+}
+
+async function activeHotMed(): Promise<Buyer[]> {
+  const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
+  return buyers.filter((b) => ["hot", "medium"].includes(String(b.priority ?? "").toLowerCase()));
+}
+
+// Inicijalno "zapamti zatečeno" za sve hot/med kupce — bez slanja.
+async function baselineBuyers(): Promise<number> {
+  const buyers = await activeHotMed();
+  const all = await searchFourZida({ maxPages: getSettings().maxPages });
+  const tol = getSettings().priceTolerance;
+  const monitor = getBuyerMonitor();
+  for (const b of buyers) {
+    const criteria = await resolveBuyerCriteria(b);
+    criteria.priceTolerance = tol;
+    monitor[b.id] = { text: buyerText(b), criteria, seen: matchListings(all, criteria).map((m) => m.id) };
+  }
+  const ids = new Set(buyers.map((b) => b.id));
+  for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
+  saveBuyerMonitor(monitor);
+  return buyers.length;
+}
+
+async function handleAuto(t: string, chatId?: number): Promise<string | null> {
+  const m = t.match(/^\/auto\b\s*(\w+)?/i);
+  if (!m) return null;
+  const arg = (m[1] ?? "").toLowerCase();
+  if (arg === "on") {
+    if (chatId == null) return "Ne mogu (nedostaje chat).";
+    setSetting("autoChatId", chatId);
+    const n = await baselineBuyers();
+    return `✅ Auto-praćenje uključeno. Pratim ${n} HOT/MED kupaca; alarmi stižu OVDE. Javiću za svaki NOV oglas (zatečene ne brojim kao nove).`;
+  }
+  if (arg === "off") {
+    setSetting("autoChatId", 0);
+    return "Auto-praćenje HOT/MED kupaca isključeno.";
+  }
+  const cur = getSettings().autoChatId;
+  return cur
+    ? "Auto-praćenje je UKLJUČENO. /auto off da isključiš."
+    : "Auto-praćenje je isključeno. /auto on da uključiš (alarmi stižu u chat gde to ukucaš).";
+}
+
+// Pozadinski prolaz kroz hot/med kupce — pošalji samo NOVE oglase.
+async function buyerCycle(all: Listing[], chatId: number, send: Send): Promise<void> {
+  const buyers = await activeHotMed();
+  const tol = getSettings().priceTolerance;
+  const monitor = getBuyerMonitor();
+  for (const b of buyers) {
+    let entry = monitor[b.id];
+    if (!entry || entry.text !== buyerText(b)) {
+      // nov kupac ili promenjeni kriterijumi → re-parsiraj (Haiku) i baseline-uj (bez slanja)
+      const criteria = await resolveBuyerCriteria(b);
+      criteria.priceTolerance = tol;
+      monitor[b.id] = { text: buyerText(b), criteria, seen: matchListings(all, criteria).map((m) => m.id) };
+      continue;
+    }
+    entry.criteria.priceTolerance = tol;
+    const fresh = matchListings(all, entry.criteria).filter((m) => !entry.seen.includes(m.id));
+    for (const m of fresh.slice(0, 10)) {
+      await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})\n${fmtListing(m)}`);
+    }
+    if (fresh.length) entry.seen = [...entry.seen, ...fresh.map((m) => m.id)].slice(-300);
+  }
+  const ids = new Set(buyers.map((b) => b.id));
+  for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
+  saveBuyerMonitor(monitor);
 }
 
 export async function handleText(text: string, user?: string, chatId?: number): Promise<string> {
@@ -143,6 +207,9 @@ export async function handleText(text: string, user?: string, chatId?: number): 
 
   const settingsReply = handleSettings(t);
   if (settingsReply) return settingsReply;
+
+  const autoReply = await handleAuto(t, chatId);
+  if (autoReply) return autoReply;
 
   const watchReply = await handleWatch(t, chatId);
   if (watchReply) return watchReply;
@@ -159,19 +226,16 @@ export async function handleText(text: string, user?: string, chatId?: number): 
 
   if (/^\/kupci\b/i.test(t)) {
     const buyers = await getBuyers({ status: "Aktivan" });
-    return (
-      `👥 Aktivnih kupaca: ${buyers.length}\n` +
-      buyers.slice(0, 40).map((b) => `• ${b.first_name} ${b.last_name}`).join("\n")
-    );
+    return `👥 Aktivnih kupaca: ${buyers.length}\n` + buyers.slice(0, 40).map((b) => `• ${b.first_name} ${b.last_name}`).join("\n");
   }
 
   let criteria: Criteria;
   let who: string;
   const byBuyer = t.match(/^(?:\/kupac\s+|za\s+)(.+)/i);
   if (byBuyer) {
-    const { criteria: c, label } = await resolveTarget(byBuyer[1].trim());
-    criteria = c;
-    who = label;
+    const r = await resolveTarget(byBuyer[1].trim());
+    criteria = r.criteria;
+    who = r.label;
   } else {
     criteria = await criteriaFromText(t);
     who = "Slobodna pretraga";
@@ -185,20 +249,19 @@ export async function handleText(text: string, user?: string, chatId?: number): 
   return formatReply(who, criteria, all.length, matches, s.resultCount);
 }
 
-// Pozadinska provera svih praćenja: pošalji samo NOVE oglase (preko `send`).
-export async function runWatchCycle(
-  send: (chatId: number, text: string) => Promise<void>,
-): Promise<void> {
+// Pozadinska provera: ručna praćenja + auto HOT/MED kupci. Šalje samo NOVE oglase.
+export async function runWatchCycle(send: Send): Promise<void> {
   const watches = getWatches();
-  if (!watches.length) return;
-  const all = await searchFourZida({ maxPages: getSettings().maxPages }); // keš: jedan obilazak za sve
+  const auto = getSettings().autoChatId;
+  if (!watches.length && !auto) return;
+  const all = await searchFourZida({ maxPages: getSettings().maxPages });
+
   for (const w of watches) {
-    const matches = matchListings(all, w.criteria);
-    const fresh = matches.filter((m) => !w.seen.includes(m.id));
+    const fresh = matchListings(all, w.criteria).filter((m) => !w.seen.includes(m.id));
     if (!fresh.length) continue;
-    for (const m of fresh.slice(0, 10)) {
-      await send(w.chatId, `🔔 NOVO za "${w.label}"\n${fmtListing(m)}`);
-    }
+    for (const m of fresh.slice(0, 10)) await send(w.chatId, `🔔 NOVO za "${w.label}"\n${fmtListing(m)}`);
     updateWatchSeen(w.id, [...w.seen, ...fresh.map((m) => m.id)]);
   }
+
+  if (auto) await buyerCycle(all, auto, send);
 }

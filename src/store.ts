@@ -11,15 +11,17 @@ const SETTINGS_FILE = join(ROOT, "settings.json");
 const SUGGESTIONS_FILE = join(ROOT, "predlozi.txt");
 const EMPTY_LOG = join(ROOT, "prazne-pretrage.txt");
 const WATCHES_FILE = join(ROOT, "watches.json");
+const MONITOR_FILE = join(ROOT, "buyer-monitor.json");
 
 // ── Podešavanja ──
 export type Settings = {
   priceTolerance: number; // 0.1 = dozvoli +10% preko budžeta
   resultCount: number; // koliko rezultata prikazati
   maxPages: number; // dubina pretrage 4zida (broj strana)
+  autoChatId: number; // chat za auto-alarme HOT/MED kupaca (0 = isključeno)
 };
 
-const DEFAULTS: Settings = { priceTolerance: 0, resultCount: 8, maxPages: 18 };
+const DEFAULTS: Settings = { priceTolerance: 0, resultCount: 8, maxPages: 18, autoChatId: 0 };
 
 export function getSettings(): Settings {
   try {
@@ -109,4 +111,22 @@ export function updateWatchSeen(id: string, seen: string[]): void {
   if (!w) return;
   w.seen = seen.slice(-300); // ograniči rast
   saveWatches(all);
+}
+
+// ── Auto-praćenje kupaca (HOT/MED): keš kriterijuma + viđeni oglasi po kupcu ──
+export type MonitorEntry = { text: string; criteria: Criteria; seen: string[] };
+
+export function getBuyerMonitor(): Record<string, MonitorEntry> {
+  try {
+    if (existsSync(MONITOR_FILE)) {
+      return JSON.parse(readFileSync(MONITOR_FILE, "utf8")) as Record<string, MonitorEntry>;
+    }
+  } catch {
+    /* ignoriši */
+  }
+  return {};
+}
+
+export function saveBuyerMonitor(map: Record<string, MonitorEntry>): void {
+  writeFileSync(MONITOR_FILE, JSON.stringify(map, null, 2));
 }
