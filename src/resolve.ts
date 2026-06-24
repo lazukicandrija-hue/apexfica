@@ -47,7 +47,7 @@ export async function resolveBuyerCriteria(b: Buyer): Promise<Criteria> {
   const locations = locationSlugs(b.preferred_locations);
   const text = [b.location, b.notes].filter(Boolean).join(". ").trim();
 
-  let parsed: Partial<Criteria> & { location?: string } = {};
+  let parsed: Partial<Criteria> = {};
   if (text.length > 8) {
     try {
       parsed = await parseCriteria(text);
@@ -57,7 +57,7 @@ export async function resolveBuyerCriteria(b: Buyer): Promise<Criteria> {
   }
 
   return {
-    locations: locations.length ? locations : parsed.location ? [parsed.location] : undefined,
+    locations: locations.length ? locations : parsed.locations?.length ? parsed.locations : undefined,
     excludeLocations: parsed.excludeLocations,
     priceMin: parsed.priceMin ?? undefined,
     priceMax: parsed.priceMax ?? (b.budget ?? undefined),
@@ -72,7 +72,7 @@ export async function resolveBuyerCriteria(b: Buyer): Promise<Criteria> {
 export async function criteriaFromText(text: string): Promise<Criteria> {
   const p = await parseCriteria(text);
   return {
-    location: p.location ?? undefined,
+    locations: p.locations?.length ? p.locations : undefined,
     excludeLocations: p.excludeLocations,
     priceMin: p.priceMin ?? undefined,
     priceMax: p.priceMax ?? undefined,

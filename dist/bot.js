@@ -67,7 +67,7 @@ function roomsToNumber(s) {
 // src/parse.ts
 var SYSTEM = `Ti si parser za agenciju za nekretnine u Novom Sadu. Iz teksta izvuci kriterijume pretrage stana i vrati ISKLJU\u010CIVO JSON (bez ikakvog obja\u0161njenja), ta\u010Dno po \u0161emi:
 {
-  "location": string|null,          // glavni tra\u017Eeni kvart malim slovima (npr. "centar","liman","grbavica") ili null
+  "locations": string[],            // SVI tra\u017Eeni kvartovi malim slovima (npr. ["telep","detelinara"]); prazan niz ako nije navedeno
   "excludeLocations": string[],     // kvartovi koje NE \u017Eeli (npr. ["telep","adice","klisa"])
   "priceMin": number|null,          // EUR
   "priceMax": number|null,          // EUR (npr. "do 150.000" ili "bud\u017Eet 150k" => 150000)
@@ -144,7 +144,7 @@ async function resolveBuyerCriteria(b) {
     }
   }
   return {
-    locations: locations.length ? locations : parsed.location ? [parsed.location] : void 0,
+    locations: locations.length ? locations : parsed.locations?.length ? parsed.locations : void 0,
     excludeLocations: parsed.excludeLocations,
     priceMin: parsed.priceMin ?? void 0,
     priceMax: parsed.priceMax ?? (b.budget ?? void 0),
@@ -157,7 +157,7 @@ async function resolveBuyerCriteria(b) {
 async function criteriaFromText(text) {
   const p = await parseCriteria(text);
   return {
-    location: p.location ?? void 0,
+    locations: p.locations?.length ? p.locations : void 0,
     excludeLocations: p.excludeLocations,
     priceMin: p.priceMin ?? void 0,
     priceMax: p.priceMax ?? void 0,
@@ -530,7 +530,14 @@ var SUGGESTIONS_FILE = join2(ROOT, "predlozi.txt");
 var EMPTY_LOG = join2(ROOT, "prazne-pretrage.txt");
 var WATCHES_FILE = join2(ROOT, "watches.json");
 var MONITOR_FILE = join2(ROOT, "buyer-monitor.json");
-var DEFAULTS = { priceTolerance: 0, resultCount: 8, maxPages: 18, autoChatId: 0 };
+var NOVI_SEEN_FILE = join2(ROOT, "novi-seen.json");
+var DEFAULTS = {
+  priceTolerance: 0,
+  resultCount: 8,
+  maxPages: 18,
+  autoChatId: 0,
+  noviChatId: 0
+};
 function getSettings() {
   try {
     if (existsSync2(SETTINGS_FILE)) {
@@ -611,6 +618,16 @@ function getBuyerMonitor() {
 function saveBuyerMonitor(map) {
   writeFileSync(MONITOR_FILE, JSON.stringify(map, null, 2));
 }
+function getNoviSeen() {
+  try {
+    if (existsSync2(NOVI_SEEN_FILE)) return JSON.parse(readFileSync2(NOVI_SEEN_FILE, "utf8"));
+  } catch {
+  }
+  return [];
+}
+function setNoviSeen(ids) {
+  writeFileSync(NOVI_SEEN_FILE, JSON.stringify(ids.slice(-1e3)));
+}
 
 // src/respond.ts
 var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
@@ -618,9 +635,12 @@ var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
 \u{1F50E} Slobodna pretraga: "dvosoban Liman do 130k" \xB7 "stan 50-60m2 centar do 120000, ne Telep"
 \u{1F464} Po kupcu: "za Smiljka" \xB7 /kupac Smiljka \xB7 /kupci
 
-\u{1F916} Auto-pra\u0107enje HOT/MED kupaca:
-   /auto on \u2014 Fica sam prati sve hot/med kupce i javlja OVDE \u010Dim isko\u010Di novo
+\u{1F916} Auto-pra\u0107enje kupaca:
+   /auto on \u2014 Fica sam prati SVE aktivne kupce i javlja OVDE \u010Dim isko\u010Di novo (za kog kupca)
    /auto off \xB7 /auto (status)
+
+\u{1F195} Najnoviji vlasni\u010Dki oglasi (feed):
+   /novi on \u2014 \u0161alji svaki NOV vlasni\u010Dki oglas (sa svih portala) \xB7 /novi off \xB7 /novi
 
 \u{1F514} Ru\u010Dno pra\u0107enje:
    /prati Smiljka \xB7 /prati dvosoban centar 130000-150000 \xB7 /pratnje \xB7 /prekini w1
@@ -726,12 +746,11 @@ ID: ${w.id} \u2014 zaustavi sa /prekini ${w.id}`;
 function buyerText(b) {
   return [b.location, b.notes, b.desired_rooms, b.preferred_locations, b.budget].join("|");
 }
-async function activeHotMed() {
-  const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
-  return buyers.filter((b) => ["hot", "medium"].includes(String(b.priority ?? "").toLowerCase()));
+async function activeBuyers() {
+  return await getBuyers({ status: "Aktivan" }).catch(() => []);
 }
 async function baselineBuyers() {
-  const buyers = await activeHotMed();
+  const buyers = await activeBuyers();
   const all = await searchAllPortals({ maxPages: getSettings().maxPages });
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
@@ -762,8 +781,25 @@ async function handleAuto(t, chatId) {
   const cur = getSettings().autoChatId;
   return cur ? "Auto-pra\u0107enje je UKLJU\u010CENO. /auto off da isklju\u010Di\u0161." : "Auto-pra\u0107enje je isklju\u010Deno. /auto on da uklju\u010Di\u0161 (alarmi sti\u017Eu u chat gde to ukuca\u0161).";
 }
+async function handleNovi(t, chatId) {
+  const m = t.match(/^\/novi\b\s*(\w+)?/i);
+  if (!m) return null;
+  const arg = (m[1] ?? "").toLowerCase();
+  if (arg === "on") {
+    if (chatId == null) return "Ne mogu (nedostaje chat).";
+    setSetting("noviChatId", chatId);
+    const all = await searchAllPortals({ maxPages: getSettings().maxPages });
+    setNoviSeen(all.map((l) => l.id));
+    return `\u{1F195} Feed "Najnoviji vlasni\u010Dki oglasi" UKLJU\u010CEN \u2014 \u0161aljem ti svaki NOV vlasni\u010Dki oglas (sa svih portala) \u010Dim se pojavi.`;
+  }
+  if (arg === "off") {
+    setSetting("noviChatId", 0);
+    return "Feed najnovijih oglasa isklju\u010Den.";
+  }
+  return getSettings().noviChatId ? "Feed najnovijih vlasni\u010Dkih oglasa je UKLJU\u010CEN. /novi off da isklju\u010Di\u0161." : "Feed je isklju\u010Den. /novi on da uklju\u010Di\u0161 (oglasi sti\u017Eu u chat gde to ukuca\u0161).";
+}
 async function buyerCycle(all, chatId, send, silent) {
-  const buyers = await activeHotMed();
+  const buyers = await activeBuyers();
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
   for (const b of buyers) {
@@ -781,8 +817,9 @@ async function buyerCycle(all, chatId, send, silent) {
     } else {
       const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
       const fresh = await confirmOwners(freshAll);
+      const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
       for (const m of fresh) {
-        await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})
+        await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name}${prio}
 ${fmtListing(m)}`);
       }
       if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
@@ -800,6 +837,8 @@ async function handleText(text, user, chatId) {
   if (settingsReply) return settingsReply;
   const autoReply = await handleAuto(t, chatId);
   if (autoReply) return autoReply;
+  const noviReply = await handleNovi(t, chatId);
+  if (noviReply) return noviReply;
   const watchReply = await handleWatch(t, chatId);
   if (watchReply) return watchReply;
   const sug = t.match(/^\/predlog\s+([\s\S]+)/i);
@@ -838,7 +877,8 @@ var primed = false;
 async function runWatchCycle(send) {
   const watches = getWatches();
   const auto = getSettings().autoChatId;
-  if (!watches.length && !auto) return;
+  const novi = getSettings().noviChatId;
+  if (!watches.length && !auto && !novi) return;
   const all = await searchAllPortals({ maxPages: getSettings().maxPages });
   const silent = !primed;
   primed = true;
@@ -856,6 +896,19 @@ ${fmtListing(m)}`);
     updateWatchSeen(w.id, [...w.seen, ...freshAll.map((m) => m.id)]);
   }
   if (auto) await buyerCycle(all, auto, send, silent);
+  if (novi) {
+    const seenArr = getNoviSeen();
+    const seen = new Set(seenArr);
+    const freshAll = all.filter((l) => !seen.has(l.id));
+    if (freshAll.length) {
+      if (!silent) {
+        const owners = await confirmOwners(freshAll);
+        for (const m of owners) await send(novi, `\u{1F195} Nov vlasni\u010Dki oglas (${m.portal})
+${fmtListing(m)}`);
+      }
+      setNoviSeen([...seenArr, ...freshAll.map((l) => l.id)]);
+    }
+  }
 }
 
 // src/bot.ts
@@ -878,7 +931,7 @@ async function main() {
   console.log(
     `\u{1F916} Fica @${me.result.username} slu\u0161a. Dozvoljeni: ${ALLOWED.join(", ") || "\u26A0\uFE0F SVI (postavi ALLOWED_TELEGRAM_USERS!)"}`
   );
-  const CHECK_MIN = Number(process.env.FICA_CHECK_MINUTES) || 30;
+  const CHECK_MIN = Number(process.env.FICA_CHECK_MINUTES) || 12;
   setInterval(() => {
     runWatchCycle(
       (chatId, text) => tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true }).then(() => {

@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   );
 
   // Pozadinsko praćenje: na svakih N min pošalji NOVE oglase za sva /prati
-  const CHECK_MIN = Number(process.env.FICA_CHECK_MINUTES) || 30;
+  const CHECK_MIN = Number(process.env.FICA_CHECK_MINUTES) || 12;
   setInterval(() => {
     runWatchCycle((chatId, text) =>
       tg("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true }).then(() => {}),

@@ -18,6 +18,8 @@ import {
   updateWatchSeen,
   getBuyerMonitor,
   saveBuyerMonitor,
+  getNoviSeen,
+  setNoviSeen,
 } from "./store.ts";
 
 type Send = (chatId: number, text: string) => Promise<void>;
@@ -27,9 +29,12 @@ const HELP = `👋 Ja sam Fica. Tražim stanove na 4zida.
 🔎 Slobodna pretraga: "dvosoban Liman do 130k" · "stan 50-60m2 centar do 120000, ne Telep"
 👤 Po kupcu: "za Smiljka" · /kupac Smiljka · /kupci
 
-🤖 Auto-praćenje HOT/MED kupaca:
-   /auto on — Fica sam prati sve hot/med kupce i javlja OVDE čim iskoči novo
+🤖 Auto-praćenje kupaca:
+   /auto on — Fica sam prati SVE aktivne kupce i javlja OVDE čim iskoči novo (za kog kupca)
    /auto off · /auto (status)
+
+🆕 Najnoviji vlasnički oglasi (feed):
+   /novi on — šalji svaki NOV vlasnički oglas (sa svih portala) · /novi off · /novi
 
 🔔 Ručno praćenje:
    /prati Smiljka · /prati dvosoban centar 130000-150000 · /pratnje · /prekini w1
@@ -139,19 +144,18 @@ ID: ${w.id} — zaustavi sa /prekini ${w.id}`;
   return null;
 }
 
-// ── Auto-praćenje HOT/MED kupaca ──
+// ── Auto-praćenje svih aktivnih kupaca ──
 function buyerText(b: Buyer): string {
   return [b.location, b.notes, b.desired_rooms, b.preferred_locations, b.budget].join("|");
 }
 
-async function activeHotMed(): Promise<Buyer[]> {
-  const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
-  return buyers.filter((b) => ["hot", "medium"].includes(String(b.priority ?? "").toLowerCase()));
+async function activeBuyers(): Promise<Buyer[]> {
+  return await getBuyers({ status: "Aktivan" }).catch(() => []);
 }
 
 // Inicijalno "zapamti zatečeno" za sve hot/med kupce — bez slanja.
 async function baselineBuyers(): Promise<number> {
-  const buyers = await activeHotMed();
+  const buyers = await activeBuyers();
   const all = await searchAllPortals({ maxPages: getSettings().maxPages });
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
@@ -186,9 +190,30 @@ async function handleAuto(t: string, chatId?: number): Promise<string | null> {
     : "Auto-praćenje je isključeno. /auto on da uključiš (alarmi stižu u chat gde to ukucaš).";
 }
 
+// Feed "Najnoviji vlasnički oglasi" — svaki NOV vlasnički oglas (nezavisno od kupca).
+async function handleNovi(t: string, chatId?: number): Promise<string | null> {
+  const m = t.match(/^\/novi\b\s*(\w+)?/i);
+  if (!m) return null;
+  const arg = (m[1] ?? "").toLowerCase();
+  if (arg === "on") {
+    if (chatId == null) return "Ne mogu (nedostaje chat).";
+    setSetting("noviChatId", chatId);
+    const all = await searchAllPortals({ maxPages: getSettings().maxPages });
+    setNoviSeen(all.map((l) => l.id)); // baseline: zatečeno ne šaljemo
+    return `🆕 Feed "Najnoviji vlasnički oglasi" UKLJUČEN — šaljem ti svaki NOV vlasnički oglas (sa svih portala) čim se pojavi.`;
+  }
+  if (arg === "off") {
+    setSetting("noviChatId", 0);
+    return "Feed najnovijih oglasa isključen.";
+  }
+  return getSettings().noviChatId
+    ? "Feed najnovijih vlasničkih oglasa je UKLJUČEN. /novi off da isključiš."
+    : "Feed je isključen. /novi on da uključiš (oglasi stižu u chat gde to ukucaš).";
+}
+
 // Pozadinski prolaz kroz hot/med kupce — pošalji samo NOVE oglase.
 async function buyerCycle(all: Listing[], chatId: number, send: Send, silent: boolean): Promise<void> {
-  const buyers = await activeHotMed();
+  const buyers = await activeBuyers();
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
   for (const b of buyers) {
@@ -207,8 +232,9 @@ async function buyerCycle(all: Listing[], chatId: number, send: Send, silent: bo
     } else {
       const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
       const fresh = await confirmOwners(freshAll); // proveri 4zida vlasnike samo na novim
+      const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
       for (const m of fresh) {
-        await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name} (${String(b.priority ?? "").toUpperCase()})\n${fmtListing(m)}`);
+        await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name}${prio}\n${fmtListing(m)}`);
       }
       if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
     }
@@ -228,6 +254,9 @@ export async function handleText(text: string, user?: string, chatId?: number): 
 
   const autoReply = await handleAuto(t, chatId);
   if (autoReply) return autoReply;
+
+  const noviReply = await handleNovi(t, chatId);
+  if (noviReply) return noviReply;
 
   const watchReply = await handleWatch(t, chatId);
   if (watchReply) return watchReply;
@@ -273,7 +302,8 @@ let primed = false;
 export async function runWatchCycle(send: Send): Promise<void> {
   const watches = getWatches();
   const auto = getSettings().autoChatId;
-  if (!watches.length && !auto) return;
+  const novi = getSettings().noviChatId;
+  if (!watches.length && !auto && !novi) return;
   const all = await searchAllPortals({ maxPages: getSettings().maxPages });
 
   // Prvi prolaz po startu (npr. posle deploy-a / promene skupa portala):
@@ -295,4 +325,18 @@ export async function runWatchCycle(send: Send): Promise<void> {
   }
 
   if (auto) await buyerCycle(all, auto, send, silent);
+
+  // Feed "Najnoviji vlasnički oglasi": svaki NOV vlasnički oglas (nezavisno od kupca)
+  if (novi) {
+    const seenArr = getNoviSeen();
+    const seen = new Set(seenArr);
+    const freshAll = all.filter((l) => !seen.has(l.id));
+    if (freshAll.length) {
+      if (!silent) {
+        const owners = await confirmOwners(freshAll);
+        for (const m of owners) await send(novi, `🆕 Nov vlasnički oglas (${m.portal})\n${fmtListing(m)}`);
+      }
+      setNoviSeen([...seenArr, ...freshAll.map((l) => l.id)]);
+    }
+  }
 }

@@ -20,6 +20,7 @@ predlozi.txt
 prazne-pretrage.txt
 watches.json
 buyer-monitor.json
+novi-seen.json
 
 # klonirani referentni repoi (CRM + sajt) — nisu deo Fice
 /_reference

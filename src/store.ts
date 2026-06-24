@@ -12,16 +12,24 @@ const SUGGESTIONS_FILE = join(ROOT, "predlozi.txt");
 const EMPTY_LOG = join(ROOT, "prazne-pretrage.txt");
 const WATCHES_FILE = join(ROOT, "watches.json");
 const MONITOR_FILE = join(ROOT, "buyer-monitor.json");
+const NOVI_SEEN_FILE = join(ROOT, "novi-seen.json");
 
 // ── Podešavanja ──
 export type Settings = {
   priceTolerance: number; // 0.1 = dozvoli +10% preko budžeta
   resultCount: number; // koliko rezultata prikazati
   maxPages: number; // dubina pretrage 4zida (broj strana)
-  autoChatId: number; // chat za auto-alarme HOT/MED kupaca (0 = isključeno)
+  autoChatId: number; // chat za auto-alarme kupaca (0 = isključeno)
+  noviChatId: number; // chat za feed "Najnoviji vlasnički oglasi" (0 = isključeno)
 };
 
-const DEFAULTS: Settings = { priceTolerance: 0, resultCount: 8, maxPages: 18, autoChatId: 0 };
+const DEFAULTS: Settings = {
+  priceTolerance: 0,
+  resultCount: 8,
+  maxPages: 18,
+  autoChatId: 0,
+  noviChatId: 0,
+};
 
 export function getSettings(): Settings {
   try {
@@ -129,4 +137,18 @@ export function getBuyerMonitor(): Record<string, MonitorEntry> {
 
 export function saveBuyerMonitor(map: Record<string, MonitorEntry>): void {
   writeFileSync(MONITOR_FILE, JSON.stringify(map, null, 2));
+}
+
+// ── Feed "Najnoviji vlasnički oglasi" — globalni skup već viđenih ID-jeva ──
+export function getNoviSeen(): string[] {
+  try {
+    if (existsSync(NOVI_SEEN_FILE)) return JSON.parse(readFileSync(NOVI_SEEN_FILE, "utf8")) as string[];
+  } catch {
+    /* ignoriši */
+  }
+  return [];
+}
+
+export function setNoviSeen(ids: string[]): void {
+  writeFileSync(NOVI_SEEN_FILE, JSON.stringify(ids.slice(-1000)));
 }

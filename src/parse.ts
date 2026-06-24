@@ -5,7 +5,7 @@ import type { Criteria } from "./types.ts";
 
 const SYSTEM = `Ti si parser za agenciju za nekretnine u Novom Sadu. Iz teksta izvuci kriterijume pretrage stana i vrati ISKLJUČIVO JSON (bez ikakvog objašnjenja), tačno po šemi:
 {
-  "location": string|null,          // glavni traženi kvart malim slovima (npr. "centar","liman","grbavica") ili null
+  "locations": string[],            // SVI traženi kvartovi malim slovima (npr. ["telep","detelinara"]); prazan niz ako nije navedeno
   "excludeLocations": string[],     // kvartovi koje NE želi (npr. ["telep","adice","klisa"])
   "priceMin": number|null,          // EUR
   "priceMax": number|null,          // EUR (npr. "do 150.000" ili "budžet 150k" => 150000)
