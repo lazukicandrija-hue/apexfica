@@ -788,9 +788,7 @@ async function handleNovi(t, chatId) {
   if (arg === "on") {
     if (chatId == null) return "Ne mogu (nedostaje chat).";
     setSetting("noviChatId", chatId);
-    const all = await searchAllPortals({ maxPages: getSettings().maxPages });
-    setNoviSeen(all.map((l) => l.id));
-    return `\u{1F195} Feed "Najnoviji vlasni\u010Dki oglasi" UKLJU\u010CEN \u2014 \u0161aljem ti svaki NOV vlasni\u010Dki oglas (sa svih portala) \u010Dim se pojavi.`;
+    return `\u{1F195} Feed "Najnoviji vlasni\u010Dki oglasi" UKLJU\u010CEN \u2014 za koji minut ti \u0161aljem zadnjih par vlasni\u010Dkih oglasa, pa onda svaki novi \u010Dim se pojavi.`;
   }
   if (arg === "off") {
     setSetting("noviChatId", 0);
@@ -901,11 +899,10 @@ ${fmtListing(m)}`);
     const seen = new Set(seenArr);
     const freshAll = all.filter((l) => !seen.has(l.id));
     if (freshAll.length) {
-      if (!silent) {
-        const owners = await confirmOwners(freshAll);
-        for (const m of owners) await send(novi, `\u{1F195} Nov vlasni\u010Dki oglas (${m.portal})
+      const owners = await confirmOwners(freshAll);
+      const toSend = seenArr.length === 0 ? owners.slice(0, 15) : owners;
+      for (const m of toSend) await send(novi, `\u{1F195} Nov vlasni\u010Dki oglas (${m.portal})
 ${fmtListing(m)}`);
-      }
       setNoviSeen([...seenArr, ...freshAll.map((l) => l.id)]);
     }
   }

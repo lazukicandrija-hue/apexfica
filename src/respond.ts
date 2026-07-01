@@ -198,9 +198,7 @@ async function handleNovi(t: string, chatId?: number): Promise<string | null> {
   if (arg === "on") {
     if (chatId == null) return "Ne mogu (nedostaje chat).";
     setSetting("noviChatId", chatId);
-    const all = await searchAllPortals({ maxPages: getSettings().maxPages });
-    setNoviSeen(all.map((l) => l.id)); // baseline: zatečeno ne šaljemo
-    return `🆕 Feed "Najnoviji vlasnički oglasi" UKLJUČEN — šaljem ti svaki NOV vlasnički oglas (sa svih portala) čim se pojavi.`;
+    return `🆕 Feed "Najnoviji vlasnički oglasi" UKLJUČEN — za koji minut ti šaljem zadnjih par vlasničkih oglasa, pa onda svaki novi čim se pojavi.`;
   }
   if (arg === "off") {
     setSetting("noviChatId", 0);
@@ -332,10 +330,10 @@ export async function runWatchCycle(send: Send): Promise<void> {
     const seen = new Set(seenArr);
     const freshAll = all.filter((l) => !seen.has(l.id));
     if (freshAll.length) {
-      if (!silent) {
-        const owners = await confirmOwners(freshAll);
-        for (const m of owners) await send(novi, `🆕 Nov vlasnički oglas (${m.portal})\n${fmtListing(m)}`);
-      }
+      const owners = await confirmOwners(freshAll);
+      // prvi put (nema baseline-a): pošalji zadnjih ~15 da se ODMAH vidi da radi; posle samo nove
+      const toSend = seenArr.length === 0 ? owners.slice(0, 15) : owners;
+      for (const m of toSend) await send(novi, `🆕 Nov vlasnički oglas (${m.portal})\n${fmtListing(m)}`);
       setNoviSeen([...seenArr, ...freshAll.map((l) => l.id)]);
     }
   }
