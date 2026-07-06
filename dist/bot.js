@@ -81,6 +81,7 @@ var SYSTEM = `Ti si parser za agenciju za nekretnine u Novom Sadu. Iz teksta izv
 Pravila:
 - "oko N kvadrata" => areaMin = N-5, areaMax = N+10.
 - Sobnost re\u010Dima: garsonjera=0.5, jednosoban=1, jednoiposoban=1.5, dvosoban=2, dvoiposoban=2.5, trosoban=3, troiposoban=3.5.
+- VA\u017DNO \u2014 "spava\u0107a soba" NIJE isto \u0161to i "soba": "N spava\u0107ih soba" = sobnost N+1 (spava\u0107a + dnevna soba). Zna\u010Di "jedna spava\u0107a soba" = dvosoban (roomsMin=roomsMax=2); "dve spava\u0107e sobe" = trosoban (3); "tri spava\u0107e" = \u010Detvorosoban (4).
 - Kvartove vrati malim slovima bez kva\u010Dica (\u0161->s, \u010D/\u0107->c, \u017E->z, \u0111->dj).
 - Ako ne\u0161to nije navedeno, stavi null odnosno prazan niz.`;
 async function parseCriteria(text) {
@@ -501,7 +502,7 @@ function matchListings(listings, c) {
     const wantLocs = c.locations?.length ? c.locations : c.location ? [c.location] : [];
     if (wantLocs.length) {
       const slug = l.location.toLowerCase();
-      if (!wantLocs.some((x) => slug.includes(x.toLowerCase()))) return false;
+      if (!wantLocs.some((x) => slug.includes(x.toLowerCase().replace(/\s+/g, "-")))) return false;
     }
     if (c.excludeLocations?.length) {
       const slug = l.location.toLowerCase();

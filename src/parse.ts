@@ -19,6 +19,7 @@ const SYSTEM = `Ti si parser za agenciju za nekretnine u Novom Sadu. Iz teksta i
 Pravila:
 - "oko N kvadrata" => areaMin = N-5, areaMax = N+10.
 - Sobnost rečima: garsonjera=0.5, jednosoban=1, jednoiposoban=1.5, dvosoban=2, dvoiposoban=2.5, trosoban=3, troiposoban=3.5.
+- VAŽNO — "spavaća soba" NIJE isto što i "soba": "N spavaćih soba" = sobnost N+1 (spavaća + dnevna soba). Znači "jedna spavaća soba" = dvosoban (roomsMin=roomsMax=2); "dve spavaće sobe" = trosoban (3); "tri spavaće" = četvorosoban (4).
 - Kvartove vrati malim slovima bez kvačica (š->s, č/ć->c, ž->z, đ->dj).
 - Ako nešto nije navedeno, stavi null odnosno prazan niz.`;
 

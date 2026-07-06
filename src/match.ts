@@ -16,7 +16,7 @@ export function matchListings(listings: Listing[], c: Criteria): Listing[] {
       const wantLocs = c.locations?.length ? c.locations : c.location ? [c.location] : [];
       if (wantLocs.length) {
         const slug = l.location.toLowerCase();
-        if (!wantLocs.some((x) => slug.includes(x.toLowerCase()))) return false;
+        if (!wantLocs.some((x) => slug.includes(x.toLowerCase().replace(/\s+/g, "-")))) return false;
       }
       if (c.excludeLocations?.length) {
         const slug = l.location.toLowerCase();
