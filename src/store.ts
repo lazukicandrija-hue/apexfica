@@ -14,6 +14,7 @@ const WATCHES_FILE = join(ROOT, "watches.json");
 const MONITOR_FILE = join(ROOT, "buyer-monitor.json");
 const NOVI_SEEN_FILE = join(ROOT, "novi-seen.json");
 const ALLOWED_FILE = join(ROOT, "allowed.json");
+const AUTO_AGENTS_FILE = join(ROOT, "auto-agents.json");
 
 // ── Podešavanja ──
 export type Settings = {
@@ -183,4 +184,28 @@ export function removeAllowed(username: string): string {
   const u = normUser(username);
   writeFileSync(ALLOWED_FILE, JSON.stringify(getAllowedExtra().filter((x) => x !== u)));
   return u;
+}
+
+// ── Auto-praćenje po agentu: koji chat prima alarme za kog agenta ({chatId: agentId}) ──
+export function getAutoAgents(): Record<string, string> {
+  try {
+    if (existsSync(AUTO_AGENTS_FILE)) {
+      return JSON.parse(readFileSync(AUTO_AGENTS_FILE, "utf8")) as Record<string, string>;
+    }
+  } catch {
+    /* ignoriši */
+  }
+  return {};
+}
+
+export function setAutoAgent(chatId: number, agentId: string): void {
+  const m = getAutoAgents();
+  m[String(chatId)] = agentId;
+  writeFileSync(AUTO_AGENTS_FILE, JSON.stringify(m, null, 2));
+}
+
+export function removeAutoAgent(chatId: number): void {
+  const m = getAutoAgents();
+  delete m[String(chatId)];
+  writeFileSync(AUTO_AGENTS_FILE, JSON.stringify(m, null, 2));
 }

@@ -22,6 +22,7 @@ watches.json
 buyer-monitor.json
 novi-seen.json
 allowed.json
+auto-agents.json
 
 # klonirani referentni repoi (CRM + sajt) — nisu deo Fice
 /_reference

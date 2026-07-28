@@ -23,6 +23,9 @@ import {
   getAllowedExtra,
   addAllowed,
   removeAllowed,
+  getAutoAgents,
+  setAutoAgent,
+  removeAutoAgent,
 } from "./store.ts";
 
 type Send = (chatId: number, text: string) => Promise<void>;
@@ -32,9 +35,9 @@ const HELP = `👋 Ja sam Fica. Tražim stanove na 4zida.
 🔎 Slobodna pretraga: "dvosoban Liman do 130k" · "stan 50-60m2 centar do 120000, ne Telep"
 👤 Po kupcu: "za Smiljka" · /kupac Smiljka · /kupci
 
-🤖 Auto-praćenje kupaca:
-   /auto on — Fica sam prati SVE aktivne kupce i javlja OVDE čim iskoči novo (za kog kupca)
-   /auto off · /auto (status)
+🤖 Auto-praćenje TVOJIH kupaca (svaki agent samo svoje):
+   /agent <ime tvog kupca> — poveži se sa svojim kupcima i uključi (npr. /agent Danka)
+   /auto (status) · /auto off
 
 🆕 Najnoviji vlasnički oglasi (feed):
    /novi on — šalji svaki NOV vlasnički oglas (sa svih portala) · /novi off · /novi
@@ -174,24 +177,42 @@ async function baselineBuyers(): Promise<number> {
   return buyers.length;
 }
 
-async function handleAuto(t: string, chatId?: number): Promise<string | null> {
+// /agent <ime kupca> → prepoznaj agenta iz tog kupca, veži ovaj chat za njega, uključi auto
+async function handleAgent(t: string, chatId?: number): Promise<string | null> {
+  const m = t.match(/^\/agent\s+(.+)/is);
+  if (!m) return null;
+  if (chatId == null) return "Ne mogu (nedostaje chat).";
+  const name = m[1].trim();
+  const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
+  const b = buyers.find((x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(name.toLowerCase()));
+  if (!b) return `Ne nađoh aktivnog kupca "${name}". Napiši ime jednog TVOG kupca iz CRM-a (npr. /agent Danka).`;
+  if (!b.agent_id)
+    return `Kupac ${b.first_name} ${b.last_name} nema dodeljenog agenta u CRM-u — probaj drugog svog kupca (ili se dodeli kao agent tom kupcu u CRM-u).`;
+  setAutoAgent(chatId, b.agent_id);
+  const mine = buyers.filter((x) => x.agent_id === b.agent_id);
+  const names = mine.slice(0, 8).map((x) => `${x.first_name} ${x.last_name}`).join(", ");
+  return `✅ Prepoznat si kao agent za ${mine.length} kupaca: ${names}${mine.length > 8 ? "…" : ""}.
+🔔 Auto-praćenje UKLJUČENO — šaljem ti SAMO tvoje kupce, čim iskoči nov oglas. (isključi: /auto off)`;
+}
+
+// /auto — status / isključivanje (uključivanje ide preko /agent)
+function handleAuto(t: string, chatId?: number): string | null {
   const m = t.match(/^\/auto\b\s*(\w+)?/i);
   if (!m) return null;
   const arg = (m[1] ?? "").toLowerCase();
-  if (arg === "on") {
-    if (chatId == null) return "Ne mogu (nedostaje chat).";
-    setSetting("autoChatId", chatId);
-    const n = await baselineBuyers();
-    return `✅ Auto-praćenje uključeno. Pratim ${n} HOT/MED kupaca; alarmi stižu OVDE. Javiću za svaki NOV oglas (zatečene ne brojim kao nove).`;
-  }
+  const on = chatId != null && getAutoAgents()[String(chatId)] != null;
   if (arg === "off") {
-    setSetting("autoChatId", 0);
-    return "Auto-praćenje HOT/MED kupaca isključeno.";
+    if (chatId != null) removeAutoAgent(chatId);
+    return "Auto-praćenje isključeno za ovaj chat.";
   }
-  const cur = getSettings().autoChatId;
-  return cur
-    ? "Auto-praćenje je UKLJUČENO. /auto off da isključiš."
-    : "Auto-praćenje je isključeno. /auto on da uključiš (alarmi stižu u chat gde to ukucaš).";
+  if (arg === "on") {
+    return on
+      ? "Auto-praćenje je već UKLJUČENO za tebe."
+      : "Da uključiš, prvo se predstavi: /agent <ime jednog tvog kupca> (npr. /agent Danka).";
+  }
+  return on
+    ? "Auto-praćenje je UKLJUČENO — dobijaš samo svoje kupce. /auto off da isključiš."
+    : "Auto-praćenje je isključeno. Uključi sa: /agent <ime tvog kupca>.";
 }
 
 // Feed "Najnoviji vlasnički oglasi" — svaki NOV vlasnički oglas (nezavisno od kupca).
@@ -214,11 +235,22 @@ async function handleNovi(t: string, chatId?: number): Promise<string | null> {
 }
 
 // Pozadinski prolaz kroz hot/med kupce — pošalji samo NOVE oglase.
-async function buyerCycle(all: Listing[], chatId: number, send: Send, silent: boolean): Promise<void> {
+async function buyerCycle(all: Listing[], send: Send, silent: boolean): Promise<void> {
+  const autoAgents = getAutoAgents(); // {chatId: agentId}
+  const agentToChat = new Map<string, number>();
+  for (const [cid, aid] of Object.entries(autoAgents)) agentToChat.set(aid, Number(cid));
+  if (!agentToChat.size) return;
+
   const buyers = await activeBuyers();
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
+  const watchedIds = new Set<string>();
+
   for (const b of buyers) {
+    const chatId = agentToChat.get(String(b.agent_id ?? ""));
+    if (chatId == null) continue; // kupac nema registrovanog agenta → niko ga ne prati
+    watchedIds.add(b.id);
+
     let entry = monitor[b.id];
     const changed = !entry || entry.text !== buyerText(b);
     if (changed) {
@@ -242,8 +274,7 @@ async function buyerCycle(all: Listing[], chatId: number, send: Send, silent: bo
     }
     monitor[b.id] = entry;
   }
-  const ids = new Set(buyers.map((b) => b.id));
-  for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
+  for (const id of Object.keys(monitor)) if (!watchedIds.has(id)) delete monitor[id];
   saveBuyerMonitor(monitor);
 }
 
@@ -254,7 +285,10 @@ export async function handleText(text: string, user?: string, chatId?: number): 
   const settingsReply = handleSettings(t);
   if (settingsReply) return settingsReply;
 
-  const autoReply = await handleAuto(t, chatId);
+  const agentReply = await handleAgent(t, chatId);
+  if (agentReply) return agentReply;
+
+  const autoReply = handleAuto(t, chatId);
   if (autoReply) return autoReply;
 
   const noviReply = await handleNovi(t, chatId);
@@ -321,9 +355,9 @@ let primed = false;
 
 export async function runWatchCycle(send: Send): Promise<void> {
   const watches = getWatches();
-  const auto = getSettings().autoChatId;
+  const hasAuto = Object.keys(getAutoAgents()).length > 0;
   const novi = getSettings().noviChatId;
-  if (!watches.length && !auto && !novi) return;
+  if (!watches.length && !hasAuto && !novi) return;
   const all = await searchAllPortals({ maxPages: getSettings().maxPages });
 
   // Prvi prolaz po startu (npr. posle deploy-a / promene skupa portala):
@@ -344,7 +378,7 @@ export async function runWatchCycle(send: Send): Promise<void> {
     updateWatchSeen(w.id, [...w.seen, ...freshAll.map((m) => m.id)]);
   }
 
-  if (auto) await buyerCycle(all, auto, send, silent);
+  if (hasAuto) await buyerCycle(all, send, silent);
 
   // Feed "Najnoviji vlasnički oglasi": svaki NOV vlasnički oglas (nezavisno od kupca)
   if (novi) {

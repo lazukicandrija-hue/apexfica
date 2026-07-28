@@ -20,6 +20,7 @@ export type Buyer = {
   notes?: string | null;
   status?: string | null; // Aktivan | Pauzirana Potraga | Kupio Stan
   priority?: string | null;
+  agent_id?: string | null; // koji agent "poseduje" kupca (za per-agent praćenje)
 };
 
 function authHeaders(): Record<string, string> {

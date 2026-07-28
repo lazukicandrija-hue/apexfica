@@ -533,6 +533,7 @@ var WATCHES_FILE = join2(ROOT, "watches.json");
 var MONITOR_FILE = join2(ROOT, "buyer-monitor.json");
 var NOVI_SEEN_FILE = join2(ROOT, "novi-seen.json");
 var ALLOWED_FILE = join2(ROOT, "allowed.json");
+var AUTO_AGENTS_FILE = join2(ROOT, "auto-agents.json");
 var DEFAULTS = {
   priceTolerance: 0,
   resultCount: 8,
@@ -655,6 +656,25 @@ function removeAllowed(username) {
   writeFileSync(ALLOWED_FILE, JSON.stringify(getAllowedExtra().filter((x) => x !== u)));
   return u;
 }
+function getAutoAgents() {
+  try {
+    if (existsSync2(AUTO_AGENTS_FILE)) {
+      return JSON.parse(readFileSync2(AUTO_AGENTS_FILE, "utf8"));
+    }
+  } catch {
+  }
+  return {};
+}
+function setAutoAgent(chatId, agentId) {
+  const m = getAutoAgents();
+  m[String(chatId)] = agentId;
+  writeFileSync(AUTO_AGENTS_FILE, JSON.stringify(m, null, 2));
+}
+function removeAutoAgent(chatId) {
+  const m = getAutoAgents();
+  delete m[String(chatId)];
+  writeFileSync(AUTO_AGENTS_FILE, JSON.stringify(m, null, 2));
+}
 
 // src/respond.ts
 var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
@@ -662,9 +682,9 @@ var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
 \u{1F50E} Slobodna pretraga: "dvosoban Liman do 130k" \xB7 "stan 50-60m2 centar do 120000, ne Telep"
 \u{1F464} Po kupcu: "za Smiljka" \xB7 /kupac Smiljka \xB7 /kupci
 
-\u{1F916} Auto-pra\u0107enje kupaca:
-   /auto on \u2014 Fica sam prati SVE aktivne kupce i javlja OVDE \u010Dim isko\u010Di novo (za kog kupca)
-   /auto off \xB7 /auto (status)
+\u{1F916} Auto-pra\u0107enje TVOJIH kupaca (svaki agent samo svoje):
+   /agent <ime tvog kupca> \u2014 pove\u017Ei se sa svojim kupcima i uklju\u010Di (npr. /agent Danka)
+   /auto (status) \xB7 /auto off
 
 \u{1F195} Najnoviji vlasni\u010Dki oglasi (feed):
    /novi on \u2014 \u0161alji svaki NOV vlasni\u010Dki oglas (sa svih portala) \xB7 /novi off \xB7 /novi
@@ -777,37 +797,35 @@ function buyerText(b) {
 async function activeBuyers() {
   return await getBuyers({ status: "Aktivan" }).catch(() => []);
 }
-async function baselineBuyers() {
-  const buyers = await activeBuyers();
-  const all = await searchAllPortals({ maxPages: getSettings().maxPages });
-  const tol = getSettings().priceTolerance;
-  const monitor = getBuyerMonitor();
-  for (const b of buyers) {
-    const criteria = await resolveBuyerCriteria(b);
-    criteria.priceTolerance = tol;
-    monitor[b.id] = { text: buyerText(b), criteria, seen: matchListings(all, criteria).map((m) => m.id) };
-  }
-  const ids = new Set(buyers.map((b) => b.id));
-  for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
-  saveBuyerMonitor(monitor);
-  return buyers.length;
+async function handleAgent(t, chatId) {
+  const m = t.match(/^\/agent\s+(.+)/is);
+  if (!m) return null;
+  if (chatId == null) return "Ne mogu (nedostaje chat).";
+  const name = m[1].trim();
+  const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
+  const b = buyers.find((x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(name.toLowerCase()));
+  if (!b) return `Ne na\u0111oh aktivnog kupca "${name}". Napi\u0161i ime jednog TVOG kupca iz CRM-a (npr. /agent Danka).`;
+  if (!b.agent_id)
+    return `Kupac ${b.first_name} ${b.last_name} nema dodeljenog agenta u CRM-u \u2014 probaj drugog svog kupca (ili se dodeli kao agent tom kupcu u CRM-u).`;
+  setAutoAgent(chatId, b.agent_id);
+  const mine = buyers.filter((x) => x.agent_id === b.agent_id);
+  const names = mine.slice(0, 8).map((x) => `${x.first_name} ${x.last_name}`).join(", ");
+  return `\u2705 Prepoznat si kao agent za ${mine.length} kupaca: ${names}${mine.length > 8 ? "\u2026" : ""}.
+\u{1F514} Auto-pra\u0107enje UKLJU\u010CENO \u2014 \u0161aljem ti SAMO tvoje kupce, \u010Dim isko\u010Di nov oglas. (isklju\u010Di: /auto off)`;
 }
-async function handleAuto(t, chatId) {
+function handleAuto(t, chatId) {
   const m = t.match(/^\/auto\b\s*(\w+)?/i);
   if (!m) return null;
   const arg = (m[1] ?? "").toLowerCase();
-  if (arg === "on") {
-    if (chatId == null) return "Ne mogu (nedostaje chat).";
-    setSetting("autoChatId", chatId);
-    const n = await baselineBuyers();
-    return `\u2705 Auto-pra\u0107enje uklju\u010Deno. Pratim ${n} HOT/MED kupaca; alarmi sti\u017Eu OVDE. Javi\u0107u za svaki NOV oglas (zate\u010Dene ne brojim kao nove).`;
-  }
+  const on = chatId != null && getAutoAgents()[String(chatId)] != null;
   if (arg === "off") {
-    setSetting("autoChatId", 0);
-    return "Auto-pra\u0107enje HOT/MED kupaca isklju\u010Deno.";
+    if (chatId != null) removeAutoAgent(chatId);
+    return "Auto-pra\u0107enje isklju\u010Deno za ovaj chat.";
   }
-  const cur = getSettings().autoChatId;
-  return cur ? "Auto-pra\u0107enje je UKLJU\u010CENO. /auto off da isklju\u010Di\u0161." : "Auto-pra\u0107enje je isklju\u010Deno. /auto on da uklju\u010Di\u0161 (alarmi sti\u017Eu u chat gde to ukuca\u0161).";
+  if (arg === "on") {
+    return on ? "Auto-pra\u0107enje je ve\u0107 UKLJU\u010CENO za tebe." : "Da uklju\u010Di\u0161, prvo se predstavi: /agent <ime jednog tvog kupca> (npr. /agent Danka).";
+  }
+  return on ? "Auto-pra\u0107enje je UKLJU\u010CENO \u2014 dobija\u0161 samo svoje kupce. /auto off da isklju\u010Di\u0161." : "Auto-pra\u0107enje je isklju\u010Deno. Uklju\u010Di sa: /agent <ime tvog kupca>.";
 }
 async function handleNovi(t, chatId) {
   const m = t.match(/^\/novi\b\s*(\w+)?/i);
@@ -824,11 +842,19 @@ async function handleNovi(t, chatId) {
   }
   return getSettings().noviChatId ? "Feed najnovijih vlasni\u010Dkih oglasa je UKLJU\u010CEN. /novi off da isklju\u010Di\u0161." : "Feed je isklju\u010Den. /novi on da uklju\u010Di\u0161 (oglasi sti\u017Eu u chat gde to ukuca\u0161).";
 }
-async function buyerCycle(all, chatId, send, silent) {
+async function buyerCycle(all, send, silent) {
+  const autoAgents = getAutoAgents();
+  const agentToChat = /* @__PURE__ */ new Map();
+  for (const [cid, aid] of Object.entries(autoAgents)) agentToChat.set(aid, Number(cid));
+  if (!agentToChat.size) return;
   const buyers = await activeBuyers();
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
+  const watchedIds = /* @__PURE__ */ new Set();
   for (const b of buyers) {
+    const chatId = agentToChat.get(String(b.agent_id ?? ""));
+    if (chatId == null) continue;
+    watchedIds.add(b.id);
     let entry = monitor[b.id];
     const changed = !entry || entry.text !== buyerText(b);
     if (changed) {
@@ -852,8 +878,7 @@ ${fmtListing(m)}`);
     }
     monitor[b.id] = entry;
   }
-  const ids = new Set(buyers.map((b) => b.id));
-  for (const id of Object.keys(monitor)) if (!ids.has(id)) delete monitor[id];
+  for (const id of Object.keys(monitor)) if (!watchedIds.has(id)) delete monitor[id];
   saveBuyerMonitor(monitor);
 }
 async function handleText(text, user, chatId) {
@@ -861,7 +886,9 @@ async function handleText(text, user, chatId) {
   if (!t || /^\/(start|help)\b/i.test(t)) return HELP;
   const settingsReply = handleSettings(t);
   if (settingsReply) return settingsReply;
-  const autoReply = await handleAuto(t, chatId);
+  const agentReply = await handleAgent(t, chatId);
+  if (agentReply) return agentReply;
+  const autoReply = handleAuto(t, chatId);
   if (autoReply) return autoReply;
   const noviReply = await handleNovi(t, chatId);
   if (noviReply) return noviReply;
@@ -911,9 +938,9 @@ async function handleText(text, user, chatId) {
 var primed = false;
 async function runWatchCycle(send) {
   const watches = getWatches();
-  const auto = getSettings().autoChatId;
+  const hasAuto = Object.keys(getAutoAgents()).length > 0;
   const novi = getSettings().noviChatId;
-  if (!watches.length && !auto && !novi) return;
+  if (!watches.length && !hasAuto && !novi) return;
   const all = await searchAllPortals({ maxPages: getSettings().maxPages });
   const silent = !primed;
   primed = true;
@@ -930,7 +957,7 @@ async function runWatchCycle(send) {
 ${fmtListing(m)}`);
     updateWatchSeen(w.id, [...w.seen, ...freshAll.map((m) => m.id)]);
   }
-  if (auto) await buyerCycle(all, auto, send, silent);
+  if (hasAuto) await buyerCycle(all, send, silent);
   if (novi) {
     const seenArr = getNoviSeen();
     const seen = new Set(seenArr);
