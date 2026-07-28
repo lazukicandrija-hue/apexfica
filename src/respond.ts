@@ -20,6 +20,9 @@ import {
   saveBuyerMonitor,
   getNoviSeen,
   setNoviSeen,
+  getAllowedExtra,
+  addAllowed,
+  removeAllowed,
 } from "./store.ts";
 
 type Send = (chatId: number, text: string) => Promise<void>;
@@ -40,7 +43,8 @@ const HELP = `👋 Ja sam Fica. Tražim stanove na 4zida.
    /prati Smiljka · /prati dvosoban centar 130000-150000 · /pratnje · /prekini w1
 
 ⚙️ /podesavanja · /podesi tolerancija 10 · /podesi rezultata 12 · /podesi dubina 25
-📝 /predlog <ideja> · /predlozi`;
+📝 /predlog <ideja> · /predlozi
+👥 Pristup: /dodaj @username · /ukloni @username · /korisnici`;
 
 function fmtCriteria(c: Criteria): string {
   const p: string[] = [];
@@ -255,6 +259,24 @@ export async function handleText(text: string, user?: string, chatId?: number): 
 
   const noviReply = await handleNovi(t, chatId);
   if (noviReply) return noviReply;
+
+  // 👥 upravljanje pristupom
+  const addU = t.match(/^\/dodaj\s+@?(\w+)/i);
+  if (addU) return `✅ Dodat pristup: @${addAllowed(addU[1])}. Odmah može da koristi Ficu (bez restarta).`;
+  const rmU = t.match(/^\/ukloni\s+@?(\w+)/i);
+  if (rmU) return `✅ Uklonjen pristup: @${removeAllowed(rmU[1])}. (Originalne iz .env ne uklanja ova komanda.)`;
+  if (/^\/korisnici\b/i.test(t)) {
+    const base = (process.env.ALLOWED_TELEGRAM_USERS ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const extra = getAllowedExtra();
+    return (
+      "👥 Pristup Fici imaju:\n" +
+      [...base, ...extra].map((u) => `• @${u}`).join("\n") +
+      "\n\nDodaj: /dodaj @username · Ukloni: /ukloni @username"
+    );
+  }
 
   const watchReply = await handleWatch(t, chatId);
   if (watchReply) return watchReply;

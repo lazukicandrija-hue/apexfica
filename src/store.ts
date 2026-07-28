@@ -13,6 +13,7 @@ const EMPTY_LOG = join(ROOT, "prazne-pretrage.txt");
 const WATCHES_FILE = join(ROOT, "watches.json");
 const MONITOR_FILE = join(ROOT, "buyer-monitor.json");
 const NOVI_SEEN_FILE = join(ROOT, "novi-seen.json");
+const ALLOWED_FILE = join(ROOT, "allowed.json");
 
 // ── Podešavanja ──
 export type Settings = {
@@ -151,4 +152,35 @@ export function getNoviSeen(): string[] {
 
 export function setNoviSeen(ids: string[]): void {
   writeFileSync(NOVI_SEEN_FILE, JSON.stringify(ids.slice(-1000)));
+}
+
+// ── Dodatni korisnici sa pristupom (pored onih iz .env), dodati komandom /dodaj ──
+function normUser(u: string): string {
+  return u.replace(/^@/, "").toLowerCase().trim();
+}
+
+export function getAllowedExtra(): string[] {
+  try {
+    if (existsSync(ALLOWED_FILE)) return JSON.parse(readFileSync(ALLOWED_FILE, "utf8")) as string[];
+  } catch {
+    /* ignoriši */
+  }
+  return [];
+}
+
+export function addAllowed(username: string): string {
+  const u = normUser(username);
+  if (!u) return "";
+  const cur = getAllowedExtra();
+  if (!cur.includes(u)) {
+    cur.push(u);
+    writeFileSync(ALLOWED_FILE, JSON.stringify(cur));
+  }
+  return u;
+}
+
+export function removeAllowed(username: string): string {
+  const u = normUser(username);
+  writeFileSync(ALLOWED_FILE, JSON.stringify(getAllowedExtra().filter((x) => x !== u)));
+  return u;
 }

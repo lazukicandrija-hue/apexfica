@@ -2,6 +2,7 @@
 import { loadEnv } from "./env.ts";
 loadEnv();
 import { handleText, runWatchCycle } from "./respond.ts";
+import { getAllowedExtra } from "./store.ts";
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const ALLOWED = (process.env.ALLOWED_TELEGRAM_USERS ?? "")
@@ -57,10 +58,11 @@ async function main(): Promise<void> {
       if (!msg?.text) continue;
 
       const user = (msg.from?.username ?? "").toLowerCase();
-      if (ALLOWED.length && !ALLOWED.includes(user)) {
+      const allowedNow = new Set([...ALLOWED, ...getAllowedExtra()]);
+      if (allowedNow.size && !allowedNow.has(user)) {
         await tg("sendMessage", {
           chat_id: msg.chat.id,
-          text: "⛔ Nemaš pristup Fici. Javi se Andriji da te doda.",
+          text: `⛔ Nemaš pristup Fici${user ? " (@" + user + ")" : ""}. Neka te admin doda komandom: /dodaj @${user || "tvoj_username"}`,
         });
         continue;
       }

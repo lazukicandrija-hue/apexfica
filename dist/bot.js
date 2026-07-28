@@ -532,6 +532,7 @@ var EMPTY_LOG = join2(ROOT, "prazne-pretrage.txt");
 var WATCHES_FILE = join2(ROOT, "watches.json");
 var MONITOR_FILE = join2(ROOT, "buyer-monitor.json");
 var NOVI_SEEN_FILE = join2(ROOT, "novi-seen.json");
+var ALLOWED_FILE = join2(ROOT, "allowed.json");
 var DEFAULTS = {
   priceTolerance: 0,
   resultCount: 8,
@@ -629,6 +630,31 @@ function getNoviSeen() {
 function setNoviSeen(ids) {
   writeFileSync(NOVI_SEEN_FILE, JSON.stringify(ids.slice(-1e3)));
 }
+function normUser(u) {
+  return u.replace(/^@/, "").toLowerCase().trim();
+}
+function getAllowedExtra() {
+  try {
+    if (existsSync2(ALLOWED_FILE)) return JSON.parse(readFileSync2(ALLOWED_FILE, "utf8"));
+  } catch {
+  }
+  return [];
+}
+function addAllowed(username) {
+  const u = normUser(username);
+  if (!u) return "";
+  const cur = getAllowedExtra();
+  if (!cur.includes(u)) {
+    cur.push(u);
+    writeFileSync(ALLOWED_FILE, JSON.stringify(cur));
+  }
+  return u;
+}
+function removeAllowed(username) {
+  const u = normUser(username);
+  writeFileSync(ALLOWED_FILE, JSON.stringify(getAllowedExtra().filter((x) => x !== u)));
+  return u;
+}
 
 // src/respond.ts
 var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
@@ -647,7 +673,8 @@ var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
    /prati Smiljka \xB7 /prati dvosoban centar 130000-150000 \xB7 /pratnje \xB7 /prekini w1
 
 \u2699\uFE0F /podesavanja \xB7 /podesi tolerancija 10 \xB7 /podesi rezultata 12 \xB7 /podesi dubina 25
-\u{1F4DD} /predlog <ideja> \xB7 /predlozi`;
+\u{1F4DD} /predlog <ideja> \xB7 /predlozi
+\u{1F465} Pristup: /dodaj @username \xB7 /ukloni @username \xB7 /korisnici`;
 function fmtCriteria(c) {
   const p = [];
   const locs = c.locations?.length ? c.locations.join(", ") : c.location;
@@ -838,6 +865,15 @@ async function handleText(text, user, chatId) {
   if (autoReply) return autoReply;
   const noviReply = await handleNovi(t, chatId);
   if (noviReply) return noviReply;
+  const addU = t.match(/^\/dodaj\s+@?(\w+)/i);
+  if (addU) return `\u2705 Dodat pristup: @${addAllowed(addU[1])}. Odmah mo\u017Ee da koristi Ficu (bez restarta).`;
+  const rmU = t.match(/^\/ukloni\s+@?(\w+)/i);
+  if (rmU) return `\u2705 Uklonjen pristup: @${removeAllowed(rmU[1])}. (Originalne iz .env ne uklanja ova komanda.)`;
+  if (/^\/korisnici\b/i.test(t)) {
+    const base = (process.env.ALLOWED_TELEGRAM_USERS ?? "").split(",").map((s2) => s2.trim().toLowerCase()).filter(Boolean);
+    const extra = getAllowedExtra();
+    return "\u{1F465} Pristup Fici imaju:\n" + [...base, ...extra].map((u) => `\u2022 @${u}`).join("\n") + "\n\nDodaj: /dodaj @username \xB7 Ukloni: /ukloni @username";
+  }
   const watchReply = await handleWatch(t, chatId);
   if (watchReply) return watchReply;
   const sug = t.match(/^\/predlog\s+([\s\S]+)/i);
@@ -957,10 +993,11 @@ async function main() {
       const msg = u.message;
       if (!msg?.text) continue;
       const user = (msg.from?.username ?? "").toLowerCase();
-      if (ALLOWED.length && !ALLOWED.includes(user)) {
+      const allowedNow = /* @__PURE__ */ new Set([...ALLOWED, ...getAllowedExtra()]);
+      if (allowedNow.size && !allowedNow.has(user)) {
         await tg("sendMessage", {
           chat_id: msg.chat.id,
-          text: "\u26D4 Nema\u0161 pristup Fici. Javi se Andriji da te doda."
+          text: `\u26D4 Nema\u0161 pristup Fici${user ? " (@" + user + ")" : ""}. Neka te admin doda komandom: /dodaj @${user || "tvoj_username"}`
         });
         continue;
       }
