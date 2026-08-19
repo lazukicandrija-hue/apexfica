@@ -35,8 +35,9 @@ const HELP = `👋 Ja sam Fica. Tražim stanove na 4zida.
 🔎 Slobodna pretraga: "dvosoban Liman do 130k" · "stan 50-60m2 centar do 120000, ne Telep"
 👤 Po kupcu: "za Smiljka" · /kupac Smiljka · /kupci
 
-🤖 Auto-praćenje TVOJIH kupaca (svaki agent samo svoje):
-   /agent <ime tvog kupca> — poveži se sa svojim kupcima i uključi (npr. /agent Danka)
+🤖 Auto-praćenje kupaca (šalje stanove po parametrima kupca):
+   /agent <ime tvog kupca> — dobijaj SAMO svoje kupce (npr. /agent Danka)
+   /agent svi — admin: dobijaj SVE kupce (i tuđe)
    /auto (status) · /auto off
 
 🆕 Najnoviji vlasnički oglasi (feed):
@@ -183,6 +184,11 @@ async function handleAgent(t: string, chatId?: number): Promise<string | null> {
   if (!m) return null;
   if (chatId == null) return "Ne mogu (nedostaje chat).";
   const name = m[1].trim();
+  if (/^(svi|sve|all)$/i.test(name)) {
+    setAutoAgent(chatId, "ALL");
+    return `✅ Admin režim — pratim SVE kupce (i tvoje i tuđe), po imenu kupca.
+🔔 Auto-praćenje UKLJUČENO. (isključi: /auto off)`;
+  }
   const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
   const b = buyers.find((x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(name.toLowerCase()));
   if (!b) return `Ne nađoh aktivnog kupca "${name}". Napiši ime jednog TVOG kupca iz CRM-a (npr. /agent Danka).`;
@@ -236,45 +242,51 @@ async function handleNovi(t: string, chatId?: number): Promise<string | null> {
 
 // Pozadinski prolaz kroz hot/med kupce — pošalji samo NOVE oglase.
 async function buyerCycle(all: Listing[], send: Send, silent: boolean): Promise<void> {
-  const autoAgents = getAutoAgents(); // {chatId: agentId}
-  const agentToChat = new Map<string, number>();
-  for (const [cid, aid] of Object.entries(autoAgents)) agentToChat.set(aid, Number(cid));
-  if (!agentToChat.size) return;
+  const autoAgents = getAutoAgents(); // {chatIdStr: agentId | "ALL"}
+  const chatIds = Object.keys(autoAgents);
+  if (!chatIds.length) return;
 
   const buyers = await activeBuyers();
   const tol = getSettings().priceTolerance;
-  const monitor = getBuyerMonitor();
-  const watchedIds = new Set<string>();
+  const monitor = getBuyerMonitor(); // {chatIdStr: {buyerId: entry}} — svaki chat prati nezavisno
 
-  for (const b of buyers) {
-    const chatId = agentToChat.get(String(b.agent_id ?? ""));
-    if (chatId == null) continue; // kupac nema registrovanog agenta → niko ga ne prati
-    watchedIds.add(b.id);
+  for (const chatIdStr of chatIds) {
+    const scope = autoAgents[chatIdStr];
+    const chatId = Number(chatIdStr);
+    const myBuyers =
+      scope === "ALL" ? buyers : buyers.filter((b) => String(b.agent_id ?? "") === scope);
+    const chatMon = monitor[chatIdStr] ?? {};
+    const watched = new Set<string>();
 
-    let entry = monitor[b.id];
-    const changed = !entry || entry.text !== buyerText(b);
-    if (changed) {
-      // nov kupac ili promenjeni kriterijumi → re-parsiraj (Haiku)
-      const criteria = await resolveBuyerCriteria(b);
-      criteria.priceTolerance = tol;
-      entry = { text: buyerText(b), criteria, seen: [] };
-    }
-    entry.criteria.priceTolerance = tol;
-    const matches = matchListings(all, entry.criteria);
-    if (silent || changed) {
-      entry.seen = matches.map((m) => m.id); // samo baseline, bez slanja
-    } else {
-      const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
-      const fresh = await confirmOwners(freshAll); // proveri 4zida vlasnike samo na novim
-      const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
-      for (const m of fresh) {
-        await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name}${prio}\n${fmtListing(m)}`);
+    for (const b of myBuyers) {
+      watched.add(b.id);
+      let entry = chatMon[b.id];
+      const changed = !entry || entry.text !== buyerText(b);
+      if (changed) {
+        const criteria = await resolveBuyerCriteria(b);
+        criteria.priceTolerance = tol;
+        entry = { text: buyerText(b), criteria, seen: [] };
       }
-      if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
+      entry.criteria.priceTolerance = tol;
+      const matches = matchListings(all, entry.criteria);
+      if (silent || changed) {
+        entry.seen = matches.map((m) => m.id);
+      } else {
+        const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
+        const fresh = await confirmOwners(freshAll);
+        const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
+        for (const m of fresh) {
+          await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name}${prio}\n${fmtListing(m)}`);
+        }
+        if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
+      }
+      chatMon[b.id] = entry;
     }
-    monitor[b.id] = entry;
+    for (const id of Object.keys(chatMon)) if (!watched.has(id)) delete chatMon[id];
+    monitor[chatIdStr] = chatMon;
   }
-  for (const id of Object.keys(monitor)) if (!watchedIds.has(id)) delete monitor[id];
+  // ukloni chatove koji više nisu registrovani (i stare "flat" ključeve iz ranije verzije)
+  for (const cid of Object.keys(monitor)) if (!autoAgents[cid]) delete monitor[cid];
   saveBuyerMonitor(monitor);
 }
 

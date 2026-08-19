@@ -682,8 +682,9 @@ var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
 \u{1F50E} Slobodna pretraga: "dvosoban Liman do 130k" \xB7 "stan 50-60m2 centar do 120000, ne Telep"
 \u{1F464} Po kupcu: "za Smiljka" \xB7 /kupac Smiljka \xB7 /kupci
 
-\u{1F916} Auto-pra\u0107enje TVOJIH kupaca (svaki agent samo svoje):
-   /agent <ime tvog kupca> \u2014 pove\u017Ei se sa svojim kupcima i uklju\u010Di (npr. /agent Danka)
+\u{1F916} Auto-pra\u0107enje kupaca (\u0161alje stanove po parametrima kupca):
+   /agent <ime tvog kupca> \u2014 dobijaj SAMO svoje kupce (npr. /agent Danka)
+   /agent svi \u2014 admin: dobijaj SVE kupce (i tu\u0111e)
    /auto (status) \xB7 /auto off
 
 \u{1F195} Najnoviji vlasni\u010Dki oglasi (feed):
@@ -802,6 +803,11 @@ async function handleAgent(t, chatId) {
   if (!m) return null;
   if (chatId == null) return "Ne mogu (nedostaje chat).";
   const name = m[1].trim();
+  if (/^(svi|sve|all)$/i.test(name)) {
+    setAutoAgent(chatId, "ALL");
+    return `\u2705 Admin re\u017Eim \u2014 pratim SVE kupce (i tvoje i tu\u0111e), po imenu kupca.
+\u{1F514} Auto-pra\u0107enje UKLJU\u010CENO. (isklju\u010Di: /auto off)`;
+  }
   const buyers = await getBuyers({ status: "Aktivan" }).catch(() => []);
   const b = buyers.find((x) => `${x.first_name} ${x.last_name}`.toLowerCase().includes(name.toLowerCase()));
   if (!b) return `Ne na\u0111oh aktivnog kupca "${name}". Napi\u0161i ime jednog TVOG kupca iz CRM-a (npr. /agent Danka).`;
@@ -844,41 +850,46 @@ async function handleNovi(t, chatId) {
 }
 async function buyerCycle(all, send, silent) {
   const autoAgents = getAutoAgents();
-  const agentToChat = /* @__PURE__ */ new Map();
-  for (const [cid, aid] of Object.entries(autoAgents)) agentToChat.set(aid, Number(cid));
-  if (!agentToChat.size) return;
+  const chatIds = Object.keys(autoAgents);
+  if (!chatIds.length) return;
   const buyers = await activeBuyers();
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
-  const watchedIds = /* @__PURE__ */ new Set();
-  for (const b of buyers) {
-    const chatId = agentToChat.get(String(b.agent_id ?? ""));
-    if (chatId == null) continue;
-    watchedIds.add(b.id);
-    let entry = monitor[b.id];
-    const changed = !entry || entry.text !== buyerText(b);
-    if (changed) {
-      const criteria = await resolveBuyerCriteria(b);
-      criteria.priceTolerance = tol;
-      entry = { text: buyerText(b), criteria, seen: [] };
-    }
-    entry.criteria.priceTolerance = tol;
-    const matches = matchListings(all, entry.criteria);
-    if (silent || changed) {
-      entry.seen = matches.map((m) => m.id);
-    } else {
-      const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
-      const fresh = await confirmOwners(freshAll);
-      const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
-      for (const m of fresh) {
-        await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name}${prio}
-${fmtListing(m)}`);
+  for (const chatIdStr of chatIds) {
+    const scope = autoAgents[chatIdStr];
+    const chatId = Number(chatIdStr);
+    const myBuyers = scope === "ALL" ? buyers : buyers.filter((b) => String(b.agent_id ?? "") === scope);
+    const chatMon = monitor[chatIdStr] ?? {};
+    const watched = /* @__PURE__ */ new Set();
+    for (const b of myBuyers) {
+      watched.add(b.id);
+      let entry = chatMon[b.id];
+      const changed = !entry || entry.text !== buyerText(b);
+      if (changed) {
+        const criteria = await resolveBuyerCriteria(b);
+        criteria.priceTolerance = tol;
+        entry = { text: buyerText(b), criteria, seen: [] };
       }
-      if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
+      entry.criteria.priceTolerance = tol;
+      const matches = matchListings(all, entry.criteria);
+      if (silent || changed) {
+        entry.seen = matches.map((m) => m.id);
+      } else {
+        const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
+        const fresh = await confirmOwners(freshAll);
+        const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
+        for (const m of fresh) {
+          await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name}${prio}
+${fmtListing(m)}`);
+        }
+        if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
+      }
+      chatMon[b.id] = entry;
     }
-    monitor[b.id] = entry;
+    for (const id of Object.keys(chatMon)) if (!watched.has(id)) delete chatMon[id];
+    monitor[chatIdStr] = chatMon;
   }
-  for (const id of Object.keys(monitor)) if (!watchedIds.has(id)) delete monitor[id];
+  for (const cid of Object.keys(monitor)) if (!autoAgents[cid]) delete monitor[cid];
   saveBuyerMonitor(monitor);
 }
 async function handleText(text, user, chatId) {

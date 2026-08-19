@@ -126,10 +126,14 @@ export function updateWatchSeen(id: string, seen: string[]): void {
 // ── Auto-praćenje kupaca (HOT/MED): keš kriterijuma + viđeni oglasi po kupcu ──
 export type MonitorEntry = { text: string; criteria: Criteria; seen: string[] };
 
-export function getBuyerMonitor(): Record<string, MonitorEntry> {
+// Struktura: { [chatId]: { [buyerId]: MonitorEntry } } — svaki chat prati nezavisno.
+export function getBuyerMonitor(): Record<string, Record<string, MonitorEntry>> {
   try {
     if (existsSync(MONITOR_FILE)) {
-      return JSON.parse(readFileSync(MONITOR_FILE, "utf8")) as Record<string, MonitorEntry>;
+      return JSON.parse(readFileSync(MONITOR_FILE, "utf8")) as Record<
+        string,
+        Record<string, MonitorEntry>
+      >;
     }
   } catch {
     /* ignoriši */
@@ -137,7 +141,7 @@ export function getBuyerMonitor(): Record<string, MonitorEntry> {
   return {};
 }
 
-export function saveBuyerMonitor(map: Record<string, MonitorEntry>): void {
+export function saveBuyerMonitor(map: Record<string, Record<string, MonitorEntry>>): void {
   writeFileSync(MONITOR_FILE, JSON.stringify(map, null, 2));
 }
 
