@@ -212,9 +212,9 @@ function handleAuto(t: string, chatId?: number): string | null {
     return "Auto-praćenje isključeno za ovaj chat.";
   }
   if (arg === "on") {
-    return on
-      ? "Auto-praćenje je već UKLJUČENO za tebe."
-      : "Da uključiš, prvo se predstavi: /agent <ime jednog tvog kupca> (npr. /agent Danka).";
+    if (chatId == null) return "Ne mogu (nedostaje chat).";
+    setAutoAgent(chatId, "ALL");
+    return `✅ Auto-praćenje UKLJUČENO — dobijaš SVE kupce i njihove nove oglase (po parametrima: cena, lokacija, sobnost, kvadratura). Za samo svoje: /agent <ime tvog kupca>.`;
   }
   return on
     ? "Auto-praćenje je UKLJUČENO — dobijaš samo svoje kupce. /auto off da isključiš."

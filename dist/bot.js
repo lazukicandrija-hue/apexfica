@@ -829,7 +829,9 @@ function handleAuto(t, chatId) {
     return "Auto-pra\u0107enje isklju\u010Deno za ovaj chat.";
   }
   if (arg === "on") {
-    return on ? "Auto-pra\u0107enje je ve\u0107 UKLJU\u010CENO za tebe." : "Da uklju\u010Di\u0161, prvo se predstavi: /agent <ime jednog tvog kupca> (npr. /agent Danka).";
+    if (chatId == null) return "Ne mogu (nedostaje chat).";
+    setAutoAgent(chatId, "ALL");
+    return `\u2705 Auto-pra\u0107enje UKLJU\u010CENO \u2014 dobija\u0161 SVE kupce i njihove nove oglase (po parametrima: cena, lokacija, sobnost, kvadratura). Za samo svoje: /agent <ime tvog kupca>.`;
   }
   return on ? "Auto-pra\u0107enje je UKLJU\u010CENO \u2014 dobija\u0161 samo svoje kupce. /auto off da isklju\u010Di\u0161." : "Auto-pra\u0107enje je isklju\u010Deno. Uklju\u010Di sa: /agent <ime tvog kupca>.";
 }
