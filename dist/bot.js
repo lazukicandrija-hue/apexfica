@@ -116,6 +116,13 @@ function deburr2(s) {
   const map = { \u010D: "c", \u0107: "c", \u0161: "s", \u017E: "z", \u0111: "dj" };
   return s.toLowerCase().replace(/[čćšžđ]/g, (m) => map[m] ?? m);
 }
+function romanToArabic(s) {
+  const map = { i: "1", ii: "2", iii: "3", iv: "4", v: "5", vi: "6" };
+  return s.replace(/\s+(i{1,3}|iv|vi{0,3}|v)\s*$/i, (_, r) => " " + (map[r.toLowerCase()] ?? r));
+}
+function normLoc(x) {
+  return deburr2(romanToArabic(x)).trim().replace(/\s+/g, "-");
+}
 function toArray(s) {
   if (!s) return [];
   try {
@@ -131,7 +138,7 @@ function roomsRange(s) {
   return { min: Math.min(...nums), max: Math.max(...nums) };
 }
 function locationSlugs(s) {
-  return toArray(s).map((x) => deburr2(x).trim().replace(/\s+/g, "-")).filter(Boolean);
+  return toArray(s).map(normLoc).filter(Boolean);
 }
 async function resolveBuyerCriteria(b) {
   const rooms = roomsRange(b.desired_rooms);
@@ -158,7 +165,7 @@ async function resolveBuyerCriteria(b) {
 async function criteriaFromText(text) {
   const p = await parseCriteria(text);
   return {
-    locations: p.locations?.length ? p.locations : void 0,
+    locations: p.locations?.length ? p.locations.map(normLoc) : void 0,
     excludeLocations: p.excludeLocations,
     priceMin: p.priceMin ?? void 0,
     priceMax: p.priceMax ?? void 0,

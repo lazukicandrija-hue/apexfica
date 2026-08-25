@@ -9,6 +9,17 @@ function deburr(s: string): string {
   return s.toLowerCase().replace(/[čćšžđ]/g, (m) => map[m] ?? m);
 }
 
+// Rimski broj na kraju lokacije → arapski (Liman I → Liman 1; portali koriste "liman-1")
+function romanToArabic(s: string): string {
+  const map: Record<string, string> = { i: "1", ii: "2", iii: "3", iv: "4", v: "5", vi: "6" };
+  return s.replace(/\s+(i{1,3}|iv|vi{0,3}|v)\s*$/i, (_, r) => " " + (map[r.toLowerCase()] ?? r));
+}
+
+// Normalizuj lokaciju u slug: rimski→arapski, bez kvačica, razmak→crtica
+function normLoc(x: string): string {
+  return deburr(romanToArabic(x)).trim().replace(/\s+/g, "-");
+}
+
 // Prihvata JSON niz ('["Dvosoban","Jednoiposoban"]'), zarezom razdvojeno ("1.5, 2"), ili jednu vrednost.
 function toArray(s?: string | null): string[] {
   if (!s) return [];
@@ -34,9 +45,7 @@ function roomsRange(s?: string | null): { min?: number; max?: number } {
 }
 
 function locationSlugs(s?: string | null): string[] {
-  return toArray(s)
-    .map((x) => deburr(x).trim().replace(/\s+/g, "-"))
-    .filter(Boolean);
+  return toArray(s).map(normLoc).filter(Boolean);
 }
 
 // Kupac iz CRM-a -> kriterijumi. Sobnost = raspon iz desired_rooms; kvartovi = svi iz
@@ -72,7 +81,7 @@ export async function resolveBuyerCriteria(b: Buyer): Promise<Criteria> {
 export async function criteriaFromText(text: string): Promise<Criteria> {
   const p = await parseCriteria(text);
   return {
-    locations: p.locations?.length ? p.locations : undefined,
+    locations: p.locations?.length ? p.locations.map(normLoc) : undefined,
     excludeLocations: p.excludeLocations,
     priceMin: p.priceMin ?? undefined,
     priceMax: p.priceMax ?? undefined,
