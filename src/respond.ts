@@ -30,6 +30,10 @@ import {
 
 type Send = (chatId: number, text: string) => Promise<void>;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 const HELP = `👋 Ja sam Fica. Tražim stanove na 4zida.
 
 🔎 Slobodna pretraga: "dvosoban Liman do 130k" · "stan 50-60m2 centar do 120000, ne Telep"
@@ -261,22 +265,33 @@ async function buyerCycle(all: Listing[], send: Send, silent: boolean): Promise<
     for (const b of myBuyers) {
       watched.add(b.id);
       let entry = chatMon[b.id];
-      const changed = !entry || entry.text !== buyerText(b);
-      if (changed) {
+      const isNew = !entry;
+      const textChanged = !isNew && entry.text !== buyerText(b);
+      if (isNew || textChanged) {
         const criteria = await resolveBuyerCriteria(b);
         criteria.priceTolerance = tol;
         entry = { text: buyerText(b), criteria, seen: [] };
       }
       entry.criteria.priceTolerance = tol;
       const matches = matchListings(all, entry.criteria);
-      if (silent || changed) {
+      const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
+      if (isNew) {
+        // prvi put → catch-up: do 3 trenutna VLASNIČKA (oglasi/nekretnine, već potvrđeni),
+        // bez 4zida detaljne provere da ne hameruje (4zida nove hvata redovni prolaz)
+        const owners = matches.filter((m) => m.seller === "owner");
+        for (const m of owners.slice(0, 3)) {
+          await send(chatId, `🏠 Za kupca ${b.first_name} ${b.last_name}${prio}\n${fmtListing(m)}`);
+          await sleep(350);
+        }
         entry.seen = matches.map((m) => m.id);
+      } else if (silent || textChanged) {
+        entry.seen = matches.map((m) => m.id); // restart ili promena kriterijuma → tiho
       } else {
         const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
         const fresh = await confirmOwners(freshAll);
-        const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
         for (const m of fresh) {
           await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name}${prio}\n${fmtListing(m)}`);
+          await sleep(350);
         }
         if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
       }

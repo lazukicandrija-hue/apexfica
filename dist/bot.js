@@ -684,6 +684,9 @@ function removeAutoAgent(chatId) {
 }
 
 // src/respond.ts
+function sleep4(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 var HELP = `\u{1F44B} Ja sam Fica. Tra\u017Eim stanove na 4zida.
 
 \u{1F50E} Slobodna pretraga: "dvosoban Liman do 130k" \xB7 "stan 50-60m2 centar do 120000, ne Telep"
@@ -873,23 +876,33 @@ async function buyerCycle(all, send, silent) {
     for (const b of myBuyers) {
       watched.add(b.id);
       let entry = chatMon[b.id];
-      const changed = !entry || entry.text !== buyerText(b);
-      if (changed) {
+      const isNew = !entry;
+      const textChanged = !isNew && entry.text !== buyerText(b);
+      if (isNew || textChanged) {
         const criteria = await resolveBuyerCriteria(b);
         criteria.priceTolerance = tol;
         entry = { text: buyerText(b), criteria, seen: [] };
       }
       entry.criteria.priceTolerance = tol;
       const matches = matchListings(all, entry.criteria);
-      if (silent || changed) {
+      const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
+      if (isNew) {
+        const owners = matches.filter((m) => m.seller === "owner");
+        for (const m of owners.slice(0, 3)) {
+          await send(chatId, `\u{1F3E0} Za kupca ${b.first_name} ${b.last_name}${prio}
+${fmtListing(m)}`);
+          await sleep4(350);
+        }
+        entry.seen = matches.map((m) => m.id);
+      } else if (silent || textChanged) {
         entry.seen = matches.map((m) => m.id);
       } else {
         const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
         const fresh = await confirmOwners(freshAll);
-        const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
         for (const m of fresh) {
           await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name}${prio}
 ${fmtListing(m)}`);
+          await sleep4(350);
         }
         if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
       }
