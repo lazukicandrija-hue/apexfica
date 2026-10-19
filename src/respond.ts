@@ -71,13 +71,21 @@ function fmtListing(m: Listing): string {
 }
 
 // Vraća SVE pogotke, podeljene u više poruka (Telegram limit ~4096 znakova).
+// Max oglasa po jednoj pretrazi — zaštita od poplave/zaglavljivanja (npr. preširoki kriterijumi).
+const SEARCH_CAP = 60;
+
 function formatReplies(who: string, c: Criteria, poolSize: number, matches: Listing[]): string[] {
-  const head = `🏠 ${who}\n${fmtCriteria(c)}\n\n✅ ${matches.length} poklapanja (od ${poolSize} pregledanih):`;
+  const extra = matches.length - SEARCH_CAP;
+  const shown = matches.slice(0, SEARCH_CAP);
+  const head =
+    `🏠 ${who}\n${fmtCriteria(c)}\n\n✅ ${matches.length} poklapanja (od ${poolSize} pregledanih)` +
+    (extra > 0 ? `, prikazujem prvih ${SEARCH_CAP}` : "") +
+    ":";
   if (!matches.length) return [head + "\n(nema pogodaka — probaj šire opsege ili drugi kvart)"];
 
   const chunks: string[] = [];
   let cur = head;
-  matches.forEach((m, i) => {
+  shown.forEach((m, i) => {
     const line = `${i + 1}. ${fmtListing(m)}`;
     if ((cur + "\n\n" + line).length > 3900) {
       chunks.push(cur);
@@ -87,7 +95,21 @@ function formatReplies(who: string, c: Criteria, poolSize: number, matches: List
     }
   });
   chunks.push(cur);
+  if (extra > 0) chunks.push(`… i još ${extra}. Suzi kriterijume (cena, kvart, sobnost ili kvadratura) za uži spisak.`);
   return chunks;
+}
+
+// Ima li pretraga bar jedan stvaran filter? Bez ovoga prazni kriterijumi poklope SVE → poplava.
+function hasRealCriteria(c: Criteria): boolean {
+  return (
+    c.priceMin != null ||
+    c.priceMax != null ||
+    c.areaMin != null ||
+    c.areaMax != null ||
+    c.roomsMin != null ||
+    c.roomsMax != null ||
+    (c.locations?.length ?? 0) > 0
+  );
 }
 
 function handleSettings(t: string): string | null {
@@ -367,6 +389,15 @@ export async function handleText(text: string, user?: string, chatId?: number): 
   } else {
     criteria = await criteriaFromText(t);
     who = "Slobodna pretraga";
+  }
+
+  // Zaštita: bez ijednog stvarnog filtera ne pretražuj — inače se poklopi SVE i zatrpa chat.
+  if (!hasRealCriteria(criteria)) {
+    logEmpty(who, t, criteria);
+    return byBuyer
+      ? `🤔 Za "${who}" nemam dovoljno kriterijuma — ili ime nije u CRM-u, ili kupac nema zadate parametre. ` +
+          `Probaj tačno ime iz CRM-a, ili ukucaj kriterijume: npr. „Liman do 150000 trosoban".`
+      : `🤔 Treba mi bar jedan kriterijum: cena, kvart, sobnost ili kvadratura. Npr: „Grbavica do 120000 dvosoban".`;
   }
 
   const s = getSettings();

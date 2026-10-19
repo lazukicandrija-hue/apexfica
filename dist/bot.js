@@ -721,15 +721,18 @@ function fmtListing(m) {
   return `${price} \xB7 ${m.area ?? "\u2014"}m\xB2 \xB7 ${m.rooms ?? "\u2014"} sob \xB7 ${m.pricePerM2 ?? "\u2014"}\u20AC/m\xB2
 ${m.url}`;
 }
+var SEARCH_CAP = 60;
 function formatReplies(who, c, poolSize, matches) {
+  const extra = matches.length - SEARCH_CAP;
+  const shown = matches.slice(0, SEARCH_CAP);
   const head = `\u{1F3E0} ${who}
 ${fmtCriteria(c)}
 
-\u2705 ${matches.length} poklapanja (od ${poolSize} pregledanih):`;
+\u2705 ${matches.length} poklapanja (od ${poolSize} pregledanih)` + (extra > 0 ? `, prikazujem prvih ${SEARCH_CAP}` : "") + ":";
   if (!matches.length) return [head + "\n(nema pogodaka \u2014 probaj \u0161ire opsege ili drugi kvart)"];
   const chunks = [];
   let cur = head;
-  matches.forEach((m, i) => {
+  shown.forEach((m, i) => {
     const line = `${i + 1}. ${fmtListing(m)}`;
     if ((cur + "\n\n" + line).length > 3900) {
       chunks.push(cur);
@@ -739,7 +742,11 @@ ${fmtCriteria(c)}
     }
   });
   chunks.push(cur);
+  if (extra > 0) chunks.push(`\u2026 i jo\u0161 ${extra}. Suzi kriterijume (cena, kvart, sobnost ili kvadratura) za u\u017Ei spisak.`);
   return chunks;
+}
+function hasRealCriteria(c) {
+  return c.priceMin != null || c.priceMax != null || c.areaMin != null || c.areaMax != null || c.roomsMin != null || c.roomsMax != null || (c.locations?.length ?? 0) > 0;
 }
 function handleSettings(t) {
   if (/^\/podesavanja\b/i.test(t)) {
@@ -960,6 +967,10 @@ async function handleText(text, user, chatId) {
   } else {
     criteria = await criteriaFromText(t);
     who = "Slobodna pretraga";
+  }
+  if (!hasRealCriteria(criteria)) {
+    logEmpty(who, t, criteria);
+    return byBuyer ? `\u{1F914} Za "${who}" nemam dovoljno kriterijuma \u2014 ili ime nije u CRM-u, ili kupac nema zadate parametre. Probaj ta\u010Dno ime iz CRM-a, ili ukucaj kriterijume: npr. \u201ELiman do 150000 trosoban".` : `\u{1F914} Treba mi bar jedan kriterijum: cena, kvart, sobnost ili kvadratura. Npr: \u201EGrbavica do 120000 dvosoban".`;
   }
   const s = getSettings();
   criteria.priceTolerance = s.priceTolerance;
