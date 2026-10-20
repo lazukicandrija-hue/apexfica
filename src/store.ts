@@ -213,3 +213,22 @@ export function removeAutoAgent(chatId: number): void {
   delete m[String(chatId)];
   writeFileSync(AUTO_AGENTS_FILE, JSON.stringify(m, null, 2));
 }
+
+// ── Auto-praćenje: jedan GLOBALNI skup viđenih oglasa PO CHAT-u ({chatId: [ids]}) ──
+// Oglas je "nov" jednom po chat-u (ne po kupcu) → nema množenja istog oglasa kroz sve kupce.
+const AUTO_SEEN_FILE = join(ROOT, "auto-seen.json");
+
+export function getAutoSeen(): Record<string, string[]> {
+  try {
+    if (existsSync(AUTO_SEEN_FILE)) {
+      return JSON.parse(readFileSync(AUTO_SEEN_FILE, "utf8")) as Record<string, string[]>;
+    }
+  } catch {
+    /* ignoriši */
+  }
+  return {};
+}
+
+export function setAutoSeen(map: Record<string, string[]>): void {
+  writeFileSync(AUTO_SEEN_FILE, JSON.stringify(map));
+}

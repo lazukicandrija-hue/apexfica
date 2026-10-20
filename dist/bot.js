@@ -682,6 +682,19 @@ function removeAutoAgent(chatId) {
   delete m[String(chatId)];
   writeFileSync(AUTO_AGENTS_FILE, JSON.stringify(m, null, 2));
 }
+var AUTO_SEEN_FILE = join2(ROOT, "auto-seen.json");
+function getAutoSeen() {
+  try {
+    if (existsSync2(AUTO_SEEN_FILE)) {
+      return JSON.parse(readFileSync2(AUTO_SEEN_FILE, "utf8"));
+    }
+  } catch {
+  }
+  return {};
+}
+function setAutoSeen(map) {
+  writeFileSync(AUTO_SEEN_FILE, JSON.stringify(map));
+}
 
 // src/respond.ts
 function sleep4(ms) {
@@ -867,6 +880,7 @@ async function handleNovi(t, chatId) {
   }
   return getSettings().noviChatId ? "Feed najnovijih vlasni\u010Dkih oglasa je UKLJU\u010CEN. /novi off da isklju\u010Di\u0161." : "Feed je isklju\u010Den. /novi on da uklju\u010Di\u0161 (oglasi sti\u017Eu u chat gde to ukuca\u0161).";
 }
+var AUTO_CYCLE_CAP = 25;
 async function buyerCycle(all, send, silent) {
   const autoAgents = getAutoAgents();
   const chatIds = Object.keys(autoAgents);
@@ -874,52 +888,61 @@ async function buyerCycle(all, send, silent) {
   const buyers = await activeBuyers();
   const tol = getSettings().priceTolerance;
   const monitor = getBuyerMonitor();
+  const autoSeen = getAutoSeen();
   for (const chatIdStr of chatIds) {
     const scope = autoAgents[chatIdStr];
     const chatId = Number(chatIdStr);
     const myBuyers = scope === "ALL" ? buyers : buyers.filter((b) => String(b.agent_id ?? "") === scope);
     const chatMon = monitor[chatIdStr] ?? {};
     const watched = /* @__PURE__ */ new Set();
+    const active = [];
     for (const b of myBuyers) {
       watched.add(b.id);
       let entry = chatMon[b.id];
-      const isNew = !entry;
-      const textChanged = !isNew && entry.text !== buyerText(b);
-      if (isNew || textChanged) {
+      if (!entry || entry.text !== buyerText(b)) {
         const criteria = await resolveBuyerCriteria(b);
-        criteria.priceTolerance = tol;
         entry = { text: buyerText(b), criteria, seen: [] };
       }
       entry.criteria.priceTolerance = tol;
-      const matches = matchListings(all, entry.criteria);
-      const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
-      if (isNew) {
-        const owners = matches.filter((m) => m.seller === "owner");
-        for (const m of owners.slice(0, 3)) {
-          await send(chatId, `\u{1F3E0} Za kupca ${b.first_name} ${b.last_name}${prio}
-${fmtListing(m)}`);
-          await sleep4(350);
-        }
-        entry.seen = matches.map((m) => m.id);
-      } else if (silent || textChanged) {
-        entry.seen = matches.map((m) => m.id);
-      } else {
-        const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
-        const fresh = await confirmOwners(freshAll);
-        for (const m of fresh) {
-          await send(chatId, `\u{1F514} NOVO za kupca ${b.first_name} ${b.last_name}${prio}
-${fmtListing(m)}`);
-          await sleep4(350);
-        }
-        if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
-      }
       chatMon[b.id] = entry;
+      if (hasRealCriteria(entry.criteria)) active.push({ b, criteria: entry.criteria });
     }
     for (const id of Object.keys(chatMon)) if (!watched.has(id)) delete chatMon[id];
     monitor[chatIdStr] = chatMon;
+    const seen = new Set(autoSeen[chatIdStr] ?? []);
+    const fresh = all.filter((m) => !seen.has(m.id));
+    const doSend = !(silent || !seen.size);
+    if (doSend) {
+      const freshOwners = await confirmOwners(fresh);
+      let sent = 0;
+      let skipped = 0;
+      for (const m of freshOwners) {
+        const hits = active.filter(({ criteria }) => matchListings([m], criteria).length > 0);
+        if (!hits.length) continue;
+        if (sent >= AUTO_CYCLE_CAP) {
+          skipped++;
+          continue;
+        }
+        const names = hits.slice(0, 3).map((h) => `${h.b.first_name} ${h.b.last_name}`.trim()).join(", ");
+        const prio = hits.find((h) => h.b.priority)?.b.priority;
+        await send(chatId, `\u{1F514} NOVO za kupca ${names}${prio ? ` (${prio.toUpperCase()})` : ""}
+${fmtListing(m)}`);
+        await sleep4(350);
+        sent++;
+      }
+      if (skipped > 0) {
+        await send(chatId, `\u2026 i jo\u0161 ${skipped} novih poklapanja ovog ciklusa (presko\u010Deno zbog limita).`);
+      }
+    }
+    for (const m of all) seen.add(m.id);
+    let ids = [...seen];
+    if (ids.length > 6e3) ids = [.../* @__PURE__ */ new Set([...all.map((m) => m.id), ...ids.slice(-5e3)])];
+    autoSeen[chatIdStr] = ids;
   }
   for (const cid of Object.keys(monitor)) if (!autoAgents[cid]) delete monitor[cid];
+  for (const cid of Object.keys(autoSeen)) if (!autoAgents[cid]) delete autoSeen[cid];
   saveBuyerMonitor(monitor);
+  setAutoSeen(autoSeen);
 }
 async function handleText(text, user, chatId) {
   const t = text.trim();

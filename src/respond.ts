@@ -26,6 +26,8 @@ import {
   getAutoAgents,
   setAutoAgent,
   removeAutoAgent,
+  getAutoSeen,
+  setAutoSeen,
 } from "./store.ts";
 
 type Send = (chatId: number, text: string) => Promise<void>;
@@ -266,7 +268,13 @@ async function handleNovi(t: string, chatId?: number): Promise<string | null> {
     : "Feed je isključen. /novi on da uključiš (oglasi stižu u chat gde to ukucaš).";
 }
 
-// Pozadinski prolaz kroz hot/med kupce — pošalji samo NOVE oglase.
+// Max novih oglasa koje Fica pošalje u JEDNOM ciklusu po chat-u — brana od poplave
+// (npr. kad portal "oživi" pa odjednom vrati stotine oglasa kao nove).
+const AUTO_CYCLE_CAP = 25;
+
+// Pozadinski prolaz: od danas šalji SAMO NOVE oglase (one kojih ranije nije bilo),
+// i to svaki oglas JEDNOM po chat-u, označen imenom kupca(ca) kojem odgovara.
+// Globalni "seen" po chat-u (ne po kupcu) → isti oglas se ne množi kroz sve kupce.
 async function buyerCycle(all: Listing[], send: Send, silent: boolean): Promise<void> {
   const autoAgents = getAutoAgents(); // {chatIdStr: agentId | "ALL"}
   const chatIds = Object.keys(autoAgents);
@@ -274,7 +282,8 @@ async function buyerCycle(all: Listing[], send: Send, silent: boolean): Promise<
 
   const buyers = await activeBuyers();
   const tol = getSettings().priceTolerance;
-  const monitor = getBuyerMonitor(); // {chatIdStr: {buyerId: entry}} — svaki chat prati nezavisno
+  const monitor = getBuyerMonitor(); // {chatIdStr: {buyerId: entry}} — koristi se samo kao KEŠ kriterijuma
+  const autoSeen = getAutoSeen(); // {chatIdStr: [ids]} — globalni skup viđenih po chat-u
 
   for (const chatIdStr of chatIds) {
     const scope = autoAgents[chatIdStr];
@@ -284,47 +293,65 @@ async function buyerCycle(all: Listing[], send: Send, silent: boolean): Promise<
     const chatMon = monitor[chatIdStr] ?? {};
     const watched = new Set<string>();
 
+    // 1) Reši (i keširaj) kriterijume za svakog kupca; zadrži samo one sa STVARNIM kriterijumom
+    //    (kupac bez ijednog filtera bi poklopio SVE → preskačemo ga ovde).
+    const active: { b: Buyer; criteria: Criteria }[] = [];
     for (const b of myBuyers) {
       watched.add(b.id);
       let entry = chatMon[b.id];
-      const isNew = !entry;
-      const textChanged = !isNew && entry.text !== buyerText(b);
-      if (isNew || textChanged) {
+      if (!entry || entry.text !== buyerText(b)) {
         const criteria = await resolveBuyerCriteria(b);
-        criteria.priceTolerance = tol;
         entry = { text: buyerText(b), criteria, seen: [] };
       }
       entry.criteria.priceTolerance = tol;
-      const matches = matchListings(all, entry.criteria);
-      const prio = b.priority ? ` (${b.priority.toUpperCase()})` : "";
-      if (isNew) {
-        // prvi put → catch-up: do 3 trenutna VLASNIČKA (oglasi/nekretnine, već potvrđeni),
-        // bez 4zida detaljne provere da ne hameruje (4zida nove hvata redovni prolaz)
-        const owners = matches.filter((m) => m.seller === "owner");
-        for (const m of owners.slice(0, 3)) {
-          await send(chatId, `🏠 Za kupca ${b.first_name} ${b.last_name}${prio}\n${fmtListing(m)}`);
-          await sleep(350);
-        }
-        entry.seen = matches.map((m) => m.id);
-      } else if (silent || textChanged) {
-        entry.seen = matches.map((m) => m.id); // restart ili promena kriterijuma → tiho
-      } else {
-        const freshAll = matches.filter((m) => !entry.seen.includes(m.id));
-        const fresh = await confirmOwners(freshAll);
-        for (const m of fresh) {
-          await send(chatId, `🔔 NOVO za kupca ${b.first_name} ${b.last_name}${prio}\n${fmtListing(m)}`);
-          await sleep(350);
-        }
-        if (freshAll.length) entry.seen = [...entry.seen, ...freshAll.map((m) => m.id)].slice(-300);
-      }
       chatMon[b.id] = entry;
+      if (hasRealCriteria(entry.criteria)) active.push({ b, criteria: entry.criteria });
     }
     for (const id of Object.keys(chatMon)) if (!watched.has(id)) delete chatMon[id];
     monitor[chatIdStr] = chatMon;
+
+    // 2) Novi oglasi = trenutni koje ovaj chat još nije video.
+    //    Baseline ("od danas"): prvi prolaz posle restarta ILI prazan seen → NE šalji, samo zapamti.
+    const seen = new Set(autoSeen[chatIdStr] ?? []);
+    const fresh = all.filter((m) => !seen.has(m.id));
+    const doSend = !(silent || !seen.size);
+
+    // 3) Za svaki NOV vlasnički oglas → nađi kupce kojima odgovara i pošalji (jednom), uz tvrdi cap
+    if (doSend) {
+      const freshOwners = await confirmOwners(fresh); // u normali je fresh mali; owner-only
+      let sent = 0;
+      let skipped = 0;
+      for (const m of freshOwners) {
+        const hits = active.filter(({ criteria }) => matchListings([m], criteria).length > 0);
+        if (!hits.length) continue;
+        if (sent >= AUTO_CYCLE_CAP) {
+          skipped++;
+          continue;
+        }
+        const names = hits.slice(0, 3).map((h) => `${h.b.first_name} ${h.b.last_name}`.trim()).join(", ");
+        const prio = hits.find((h) => h.b.priority)?.b.priority;
+        await send(chatId, `🔔 NOVO za kupca ${names}${prio ? ` (${prio.toUpperCase()})` : ""}\n${fmtListing(m)}`);
+        await sleep(350);
+        sent++;
+      }
+      if (skipped > 0) {
+        await send(chatId, `… i još ${skipped} novih poklapanja ovog ciklusa (preskočeno zbog limita).`);
+      }
+    }
+
+    // 4) Zapamti (sticky): trenutni + raniji, ograničeno na ~6000, ali UVEK zadrži trenutne id-eve
+    //    (da treptaj portala — nestane pa se vrati — ne okine ponovo isti oglas).
+    for (const m of all) seen.add(m.id);
+    let ids = [...seen];
+    if (ids.length > 6000) ids = [...new Set([...all.map((m) => m.id), ...ids.slice(-5000)])];
+    autoSeen[chatIdStr] = ids;
   }
-  // ukloni chatove koji više nisu registrovani (i stare "flat" ključeve iz ranije verzije)
+
+  // Očisti chatove koji više nisu registrovani
   for (const cid of Object.keys(monitor)) if (!autoAgents[cid]) delete monitor[cid];
+  for (const cid of Object.keys(autoSeen)) if (!autoAgents[cid]) delete autoSeen[cid];
   saveBuyerMonitor(monitor);
+  setAutoSeen(autoSeen);
 }
 
 export async function handleText(text: string, user?: string, chatId?: number): Promise<string | string[]> {
