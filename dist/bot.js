@@ -1000,7 +1000,11 @@ async function handleText(text, user, chatId) {
   const all = await searchAllPortals({ maxPages: s.maxPages });
   const matches = await confirmOwners(matchListings(all, criteria));
   if (!matches.length) logEmpty(who, t, criteria);
-  return formatReplies(who, criteria, all.length, matches);
+  const reply = formatReplies(who, criteria, all.length, matches);
+  if (chatId != null && getAutoAgents()[String(chatId)] == null) {
+    reply.push("\u{1F4A1} Da ti Fica SAM javi \u010Dim isko\u010Di nov stan za tvoje kupce, ukucaj: /agent <ime tvog kupca>");
+  }
+  return reply;
 }
 var primed = false;
 async function runWatchCycle(send) {

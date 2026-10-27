@@ -432,7 +432,12 @@ export async function handleText(text: string, user?: string, chatId?: number): 
   const all = await searchAllPortals({ maxPages: s.maxPages });
   const matches = await confirmOwners(matchListings(all, criteria));
   if (!matches.length) logEmpty(who, t, criteria);
-  return formatReplies(who, criteria, all.length, matches);
+  const reply = formatReplies(who, criteria, all.length, matches);
+  // Nudge: ako ovaj chat još ne prima auto-alarme, podseti kako da ih uključi (za svoje kupce).
+  if (chatId != null && getAutoAgents()[String(chatId)] == null) {
+    reply.push("💡 Da ti Fica SAM javi čim iskoči nov stan za tvoje kupce, ukucaj: /agent <ime tvog kupca>");
+  }
+  return reply;
 }
 
 // Pozadinska provera: ručna praćenja + auto HOT/MED kupci. Šalje samo NOVE oglase.
